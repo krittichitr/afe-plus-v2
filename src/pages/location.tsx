@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { GoogleMap, MarkerF, useLoadScript, InfoWindow, Circle, DirectionsRenderer } from '@react-google-maps/api';
 import Spinner from 'react-bootstrap/Spinner';
 import { encrypt } from '@/utils/helpers'
+import MapLayerControl from '@/components/MapLayerControl'
 
 // --- Constants & Icons ---
 const CONTAINER_STYLE = { width: '100vw', height: '100vh' };
@@ -66,6 +67,7 @@ const Location = () => {
     const lastRouteTime = useRef<number>(0);
 
     const [infoWindowData, setInfoWindowData] = useState({ id: 0, address: '', show: false });
+    const [mapType, setMapType] = useState('roadmap');
 
     // --- Effects ---
 
@@ -202,7 +204,22 @@ const Location = () => {
         return () => navigator.geolocation.clearWatch(watchId);
     }, [mapRef]);
 
-    // 4. API Polling (Patient Location)
+    // --- Helpers for Distance ---
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const getDistance = (p1: { lat: number, lng: number }, p2: { lat: number, lng: number }) => {
+        const R = 6371e3; // Earth radius in meters
+        const φ1 = toRad(p1.lat);
+        const φ2 = toRad(p2.lat);
+        const Δφ = toRad(p2.lat - p1.lat);
+        const Δλ = toRad(p2.lng - p1.lng);
+        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                  Math.cos(φ1) * Math.cos(φ2) *
+                  Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    };
+
+    // 4. API Polling (Patient Location) - Dynamic Interval
     useEffect(() => {
         if (!dataUser?.takecareData?.userData?.origin?.lat && !dataUser.isLogin) return; 
         
@@ -223,12 +240,40 @@ const Location = () => {
             }
         };
 
+        // Helpers for Distance (Local Scope)
+        const toRad = (d: number) => (d * Math.PI) / 180;
+        const getDistance = (p1: { lat: number, lng: number }, p2: { lat: number, lng: number }) => {
+            const R = 6371e3; // Earth radius in meters
+            const φ1 = toRad(p1.lat);
+            const φ2 = toRad(p2.lat);
+            const Δφ = toRad(p2.lat - p1.lat);
+            const Δλ = toRad(p2.lng - p1.lng);
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        };
+
         // Initial fetch
         if (dataUser.userData) fetchLocation();
 
-        const interval = setInterval(fetchLocation, 3000);
+        // Determine Interval
+        let intervalDuration = 3000; // Default: Fast (3s) for Safety/Outside
+        
+        // Only switch to Slow (30s) if confirmed INSIDE safezone
+        if (safezonePos.lat !== 0 && patientPos.lat !== 0) {
+            const dist = getDistance(safezonePos, patientPos);
+            if (dist <= range1) {
+            } else {
+                intervalDuration = 3000; // Outside Safezone: Fast (3s)
+                 // console.log("Outside Safezone (" + Math.round(dist) + "m). Polling every 3s.");
+            }
+        }
+
+        const interval = setInterval(fetchLocation, intervalDuration);
         return () => clearInterval(interval);
-    }, [dataUser]);
+    }, [dataUser, safezonePos, patientPos, range1]);
 
     // 5. Auth & Initial Data Load
     useEffect(() => {
@@ -285,7 +330,8 @@ const Location = () => {
                         zoomControl: false,
                         heading: heading, // Dynamic Heading
                         tilt: 45, // 3D Perspective
-                        padding: padding // Offset for bottom sheet
+                        padding: padding, // Offset for bottom sheet
+                        mapTypeId: mapType
                     }}
                 >
                     {/* 1. My Location (Arrow) */}
@@ -401,6 +447,12 @@ const Location = () => {
                         </div>
                     </div>
                 </div>
+            </div>
+
+
+            {/* Map Layer Control */}
+            <div className="absolute top-4 right-4 z-40">
+                <MapLayerControl mapType={mapType} setMapType={setMapType} />
             </div>
 
             {/* Loading Overlay */}

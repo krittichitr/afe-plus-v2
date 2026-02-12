@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { GoogleMap, useJsApiLoader, DirectionsRenderer, MarkerF } from "@react-google-maps/api";
+import MapLayerControl from "@/components/MapLayerControl";
 import axios from 'axios';
 import Link from "next/link";
 import { useRouter } from 'next/router';
@@ -132,6 +133,9 @@ const NavigationMode = () => {
   const [filteredMyPos, setFilteredMyPos] = useState<google.maps.LatLngLiteral | null>(null);
   const [rawHeading, setRawHeading] = useState<number>(0);
   const [patientPos, setPatientPos] = useState<google.maps.LatLngLiteral | null>(null);
+  const [mapType, setMapType] = useState('hybrid');
+  const [isMuted, setIsMuted] = useState(false);
+  const [trackingMode, setTrackingMode] = useState<'heading' | 'north'>('heading');
 
   // -- Visuals --
   // -- Visuals --
@@ -284,7 +288,9 @@ const NavigationMode = () => {
      if (mapRef.current && filteredMyPos) {
         mapRef.current.panTo(filteredMyPos);
         mapRef.current.setZoom(19);
-        mapRef.current.setHeading(smoothHeading);
+        mapRef.current.panTo(filteredMyPos);
+        mapRef.current.setZoom(19);
+        setTrackingMode('heading'); // Resume heading tracking on recenter
      }
   };
 
@@ -332,9 +338,7 @@ const NavigationMode = () => {
                <p className="text-base md:text-lg text-green-100 font-medium">เฉียงใต้</p>
             </div>
          </div>
-         <div onClick={handleRecenter} className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full flex items-center justify-center shadow-md cursor-pointer hover:bg-gray-100 shrink-0">
-             <svg className="w-6 h-6 md:w-7 md:h-7 text-[#4285F4]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
-         </div>
+
       </div>
 
       <GoogleMap
@@ -342,7 +346,7 @@ const NavigationMode = () => {
         center={INITIAL_CENTER} // Initial only, controlled by panTo later
         zoom={19}
         onLoad={onLoad}
-        options={{ disableDefaultUI: true, mapTypeId: 'hybrid', tilt: 45, heading: smoothHeading, gestureHandling: "greedy" }}
+        options={{ disableDefaultUI: true, mapTypeId: mapType, tilt: 45, heading: trackingMode === 'heading' ? smoothHeading : 0, gestureHandling: "greedy" }}
       >
          {/* User Marker (Blue Arrow) */}
          {animatedMyPos && (
@@ -377,23 +381,36 @@ const NavigationMode = () => {
       </GoogleMap>
 
       {/* Floating Buttons */}
-      <div className="absolute right-4 top-28 md:top-32 flex flex-col gap-3 md:gap-4 z-30">
-          <div className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 relative overflow-hidden">
+      <div className="absolute right-4 top-32 md:top-36 flex flex-col gap-3 md:gap-4 z-30">
+          <MapLayerControl mapType={mapType} setMapType={setMapType} />
+          
+          {/* Compass Button - Rotates to point North, Click to toggle North Up */}
+          <div 
+            onClick={() => setTrackingMode(prev => prev === 'heading' ? 'north' : 'heading')}
+            className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 relative overflow-hidden transition-transform duration-300"
+            style={{ transform: `rotate(${-1 * (trackingMode === 'heading' ? smoothHeading : 0)}deg)` }}
+          >
              <div className="absolute top-2 w-0 h-0 border-l-[5px] border-r-[5px] border-b-[14px] border-l-transparent border-r-transparent border-b-red-600"></div>
              <div className="absolute bottom-2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[14px] border-l-transparent border-r-transparent border-t-gray-300"></div>
           </div>
-          <div className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50">
-             <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-          </div>
-          <div className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50">
-             <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
-          </div>
-          <div className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 relative">
-             <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v3" /> 
-             </svg>
-             <div className="absolute top-2 right-3 w-2 h-2 bg-red-500 rounded-full"></div>
+
+          {/* Sound Button - Toggle Mute */}
+          <div 
+             onClick={() => setIsMuted(!isMuted)}
+             className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50"
+          >
+             {isMuted ? (
+                // Muted Icon
+                <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                </svg>
+             ) : (
+                // Unmuted Icon
+                <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                </svg>
+             )}
           </div>
       </div>
 
