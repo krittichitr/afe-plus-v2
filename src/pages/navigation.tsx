@@ -1,16 +1,15 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { GoogleMap, useJsApiLoader, DirectionsRenderer, MarkerF } from "@react-google-maps/api";
+import { GoogleMap, DirectionsRenderer, MarkerF } from "@react-google-maps/api";
+import { useGoogleMaps } from "@/providers/GoogleMapsProvider"; 
 import MapLayerControl from "@/components/MapLayerControl";
 import axios from 'axios';
-import Link from "next/link";
 import { useRouter } from 'next/router';
 
 // Configuration
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100dvh" };
-// PATIENT_ICON removed (moved inside component)
 const INITIAL_CENTER = { lat: 13.7563, lng: 100.5018 };
-const POS_ANIMATION_DURATION = 800; // ms to slide to new pos
-const MIN_MOVEMENT_THRESHOLD = 1.0; // meters (ignore jitter below this)
+const POS_ANIMATION_DURATION = 800; // ms
+const MIN_MOVEMENT_THRESHOLD = 1.0; // meters
 
 // --- Math Helpers ---
 const toRad = (d: number) => (d * Math.PI) / 180;
@@ -30,11 +29,9 @@ const lerp = (start: number, end: number, t: number) => start * (1 - t) + end * 
 
 // --- Hooks ---
 
-// 1. Smooth Position Hook with Animation Loop
+// 1. Smooth Position Hook
 function useAnimatedPosition(targetPos: google.maps.LatLngLiteral | null) {
   const [visualPos, setVisualPos] = useState<google.maps.LatLngLiteral | null>(targetPos);
-  
-  // Refs for animation state
   const prevPosRef = useRef<google.maps.LatLngLiteral | null>(targetPos);
   const targetPosRef = useRef<google.maps.LatLngLiteral | null>(targetPos);
   const startTimeRef = useRef<number>(0);
@@ -42,27 +39,20 @@ function useAnimatedPosition(targetPos: google.maps.LatLngLiteral | null) {
 
   useEffect(() => {
     if (!targetPos) return;
-
-    // Initialize if first point
     if (!prevPosRef.current) {
        prevPosRef.current = targetPos;
        targetPosRef.current = targetPos;
        setVisualPos(targetPos);
        return;
     }
-
-    // New target received
-    prevPosRef.current = visualPos; // Start from WHERE WE ARE NOW (important for smoothness)
+    prevPosRef.current = visualPos;
     targetPosRef.current = targetPos;
     startTimeRef.current = performance.now();
 
     const animate = (time: number) => {
       if (!prevPosRef.current || !targetPosRef.current) return;
-
       const elapsed = time - startTimeRef.current;
       const progress = Math.min(elapsed / POS_ANIMATION_DURATION, 1);
-      
-      // Easing function (Ease-Out Quad for more natural stop)
       const ease = (t: number) => 1 - (1 - t) * (1 - t);
       const t = ease(progress);
 
@@ -74,37 +64,32 @@ function useAnimatedPosition(targetPos: google.maps.LatLngLiteral | null) {
       if (progress < 1) {
         frameRef.current = requestAnimationFrame(animate);
       } else {
-        prevPosRef.current = { lat, lng }; // Snap to end
+        prevPosRef.current = { lat, lng };
       }
     };
 
     if (frameRef.current) cancelAnimationFrame(frameRef.current);
     frameRef.current = requestAnimationFrame(animate);
-
     return () => cancelAnimationFrame(frameRef.current);
   }, [targetPos]);
 
   return visualPos;
 }
 
-// 2. Smooth Heading Hook (Average Buffer + Lerp)
+// 2. Smooth Heading Hook
 function useBufferedHeading(rawHeading: number) {
   const [visualHeading, setVisualHeading] = useState(rawHeading);
   const bufferRef = useRef<number[]>([]);
-  const MAX_BUFFER = 5; // Valid buffer size
+  const MAX_BUFFER = 5;
 
   useEffect(() => {
-    // 1. Add to buffer
     const buffer = bufferRef.current;
     if (rawHeading !== null && !isNaN(rawHeading)) {
         buffer.push(rawHeading);
         if (buffer.length > MAX_BUFFER) buffer.shift();
     }
-
     if (buffer.length === 0) return;
 
-    // 2. Average (Handling 360 wrap)
-    // Simple Circular Mean: sum sin/cos components
     let sumSin = 0;
     let sumCos = 0;
     for (const h of buffer) {
@@ -116,7 +101,6 @@ function useBufferedHeading(rawHeading: number) {
     if (avgHeading < 0) avgHeading += 360;
 
     setVisualHeading(avgHeading);
-
   }, [rawHeading]);
 
   return visualHeading;
@@ -124,12 +108,10 @@ function useBufferedHeading(rawHeading: number) {
 
 const NavigationMode = () => {
   const router = useRouter();
+  const { isLoaded } = useGoogleMaps(); // Global Loader
   const [map, setMap] = useState<google.maps.Map | null>(null);
 
-  // Icons moved to render phase to access google namespace
-  
   // -- State --
-  // We keep 'filteredMyPos' as the source for the UI animation
   const [filteredMyPos, setFilteredMyPos] = useState<google.maps.LatLngLiteral | null>(null);
   const [rawHeading, setRawHeading] = useState<number>(0);
   const [patientPos, setPatientPos] = useState<google.maps.LatLngLiteral | null>(null);
@@ -138,10 +120,9 @@ const NavigationMode = () => {
   const [trackingMode, setTrackingMode] = useState<'heading' | 'north'>('heading');
 
   // -- Visuals --
-  // -- Visuals --
   const animatedMyPos = useAnimatedPosition(filteredMyPos);
-  const animatedPatientPos = useAnimatedPosition(patientPos); // LERP for Patient
-  const smoothHeading = useBufferedHeading(rawHeading); // Using buffer logic
+  const animatedPatientPos = useAnimatedPosition(patientPos);
+  const smoothHeading = useBufferedHeading(rawHeading);
 
   // -- Routing --
   const [routeOrigin, setRouteOrigin] = useState<google.maps.LatLngLiteral | null>(null);
@@ -149,45 +130,70 @@ const NavigationMode = () => {
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
   const [routeStats, setRouteStats] = useState<{ duration: string; distance: string } | null>(null);
 
-  // Refs for Low-Pass Logic
+  // Refs
   const lastRawPosRef = useRef<google.maps.LatLngLiteral | null>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const lastRouteOriginRef = useRef<google.maps.LatLngLiteral | null>(null);
   const lastRouteDestRef = useRef<google.maps.LatLngLiteral | null>(null);
-
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: process.env.GoogleMapsApiKey || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string,
-  });
 
   const onLoad = useCallback((mapInstance: google.maps.Map) => {
     mapRef.current = mapInstance;
     setMap(mapInstance);
   }, []);
 
-  // --- 1. My Location (Navigator) with Low-Pass Filtering ---
+  // -- Compass Logic --
+  const [compassHeading, setCompassHeading] = useState<number>(0);
+  const [gpsHeading, setGpsHeading] = useState<number | null>(null);
+  const [currentSpeed, setCurrentSpeed] = useState<number>(0);
+
+  useEffect(() => {
+      const shouldUseGPS = currentSpeed > 0.8 && gpsHeading !== null;
+      setRawHeading(shouldUseGPS ? gpsHeading! : compassHeading);
+  }, [compassHeading, gpsHeading, currentSpeed]);
+
+  useEffect(() => {
+    const handleOrientation = (event: DeviceOrientationEvent) => {
+        let heading = 0;
+        // @ts-ignore
+        if (event.webkitCompassHeading) {
+            // @ts-ignore
+            heading = event.webkitCompassHeading;
+        } else if (event.alpha) {
+            heading = 360 - event.alpha; 
+        }
+        setCompassHeading(heading);
+    };
+    if (typeof window !== "undefined" && window.DeviceOrientationEvent) {
+        window.addEventListener("deviceorientation", handleOrientation as any, true);
+    }
+    return () => {
+        if (typeof window !== "undefined") {
+            window.removeEventListener("deviceorientation", handleOrientation as any);
+        }
+    };
+  }, []);
+
+  // -- GPS Logic --
   useEffect(() => {
     if (!navigator.geolocation) return;
-
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude, heading, speed } = pos.coords;
         const newRawPos = { lat: latitude, lng: longitude };
+        
+        setCurrentSpeed(speed || 0);
+        if (heading !== null && !isNaN(heading)) setGpsHeading(heading);
 
-        // A. Jitter Filter (Speed-based or Distance-based)
+        // Jitter Filter
         if (lastRawPosRef.current) {
            const dist = getDistance(lastRawPosRef.current, newRawPos);
-           // If moved very little (jitter), ignore
            if (dist < MIN_MOVEMENT_THRESHOLD) return;
         }
 
-        // B. Low-Pass Filter (Simple weighted average for position stability)
-        // alpha = 0.2 means new value contributes 20%, old 80% (Very smooth, but laggy)
-        // alpha = 1.0 means no filter.
-        // Dynamic Alpha: If speed is high, trust GPS more (alpha ~ 0.8). If slow, trust history (alpha ~ 0.2).
+        // Low-Pass
         let alpha = 0.5; 
-        if (speed && speed > 10) alpha = 0.8; // Driving fast
-        if (speed && speed < 1) alpha = 0.2; // Walking/Stopped
-        if (speed && speed < 0.2) alpha = 0.1; // Almost stopped
+        if (speed && speed > 10) alpha = 0.8; 
+        if (speed && speed < 1) alpha = 0.2; 
 
         let filteredLat = newRawPos.lat;
         let filteredLng = newRawPos.lng;
@@ -196,17 +202,11 @@ const NavigationMode = () => {
             filteredLat = lerp(lastRawPosRef.current.lat, newRawPos.lat, alpha);
             filteredLng = lerp(lastRawPosRef.current.lng, newRawPos.lng, alpha);
         }
-
         const newFilteredPos = { lat: filteredLat, lng: filteredLng };
-        
-        lastRawPosRef.current = newFilteredPos; // Store filtered as 'last known' for next iteration
-        setFilteredMyPos(newFilteredPos); // Helper for smooth hook
+        lastRawPosRef.current = newFilteredPos; 
+        setFilteredMyPos(newFilteredPos); 
 
-        if (heading !== null && !isNaN(heading)) {
-           setRawHeading(heading);
-        }
-
-        // C. Update Route Origin (Debounced by distance > 20m)
+        // Route Origin Update
         if (!lastRouteOriginRef.current || getDistance(lastRouteOriginRef.current, newFilteredPos) > 20) {
             setRouteOrigin(newFilteredPos);
             lastRouteOriginRef.current = newFilteredPos;
@@ -215,33 +215,39 @@ const NavigationMode = () => {
       (err) => console.error("Geolocation Error:", err.code, err.message),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
     );
-
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
-  // --- 2. Camera Panning (Using the Visual Position) ---
-  useEffect(() => {
-    if (mapRef.current && animatedMyPos) {
-      // Pan to the ANIMATED position so the camera glides with the marker
-      mapRef.current.panTo(animatedMyPos);
-      
-      // Auto-rotate map if driving (optional user pref)
-      mapRef.current.setHeading(smoothHeading); 
-    }
-  }, [animatedMyPos]); // smoothHeading as dep if auto-rotate
+  // -- Auto Follow Logic --
+  const [isAutoFollowing, setIsAutoFollowing] = useState(true);
 
-  // --- 3. Patient Location (ADAPTED TO API POLLING) ---
+  useEffect(() => {
+    if (isAutoFollowing && mapRef.current && animatedMyPos && window.google) {
+      let targetCenter = animatedMyPos;
+      if (trackingMode === 'heading') {
+          const metersPerPx = 156543.03392 * Math.cos(animatedMyPos.lat * Math.PI / 180) / Math.pow(2, 20);
+          const screenOffsetPx = window.innerHeight * 0.35; 
+          const offsetMeters = screenOffsetPx * metersPerPx;
+          
+          if (window.google && window.google.maps.geometry) {
+             const p = window.google.maps.geometry.spherical.computeOffset(animatedMyPos, offsetMeters, smoothHeading);
+             targetCenter = { lat: p.lat(), lng: p.lng() };
+          }
+      }
+      mapRef.current.panTo(targetCenter);
+      if (trackingMode === 'heading') {
+        mapRef.current.setHeading(smoothHeading);
+      }
+    }
+  }, [animatedMyPos, smoothHeading, isAutoFollowing, trackingMode]);
+
+  const handleMapDrag = () => setIsAutoFollowing(false);
+
+  // -- Patient Polling --
   useEffect(() => {
     const fetch = async () => {
-       // Using Router Query if available, or just mocking/polling existing logic
-       // For compatibility, we will use the same API Polling as location.tsx
-       // But wait, navigation page in demo used Supabase. 
-       // We should try to read router query params for IDs or just use the location.tsx data passed via URL?
-       // For now, let's assume we pass the same IDs in query
        const { users_id, takecare_id, idlocation } = router.query;
-       
        if (!users_id || !takecare_id) return;
-
        try {
            const url = `${process.env.WEB_DOMAIN}/api/location/getLocation?takecare_id=${takecare_id}&users_id=${users_id}&location_id=${idlocation || ''}`;
            const res = await axios.get(url);
@@ -249,25 +255,28 @@ const NavigationMode = () => {
                 const p = { lat: Number(res.data.data.locat_latitude), lng: Number(res.data.data.locat_longitude) };
                 setPatientPos(p);
                 setRouteDestination(p);
-                lastRouteDestRef.current = p;
            }
-       } catch (err) {
-           console.error(err);
-       }
+       } catch (err) { console.error(err); }
     };
-    
-    // Initial Fetch
     if (router.isReady) fetch();
-
-    // Polling Interval
-    const interval = setInterval(() => {
-        if (router.isReady) fetch();
-    }, 3000);
-
+    const interval = setInterval(() => { if (router.isReady) fetch(); }, 3000);
     return () => clearInterval(interval);
   }, [router.isReady, router.query]);
 
-  // --- 4. Directions ---
+  // -- Voice --
+  const lastInstructionRef = useRef<string>("");
+  const isMutedRef = useRef(isMuted);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
+  const speak = (text: string) => {
+     if (isMutedRef.current || typeof window === 'undefined') return;
+     window.speechSynthesis.cancel();
+     const utterance = new SpeechSynthesisUtterance(text);
+     utterance.lang = 'th-TH'; 
+     window.speechSynthesis.speak(utterance);
+  };
+
+  // -- Directions --
   useEffect(() => {
     if (isLoaded && routeOrigin && routeDestination) {
       const ds = new google.maps.DirectionsService();
@@ -279,18 +288,26 @@ const NavigationMode = () => {
                distance: leg.distance?.text || "...",
                duration: leg.duration?.text || "...",
             });
+            if (leg.steps && leg.steps.length > 0) {
+                const rawInstruction = leg.steps[0].instructions || "";
+                const cleanInstruction = rawInstruction.replace(/<[^>]+>/g, '');
+                if (cleanInstruction !== lastInstructionRef.current) {
+                    lastInstructionRef.current = cleanInstruction;
+                    const distCheck = leg.steps[0].distance?.text || "";
+                    speak(`อีก ${distCheck} ${cleanInstruction}`);
+                }
+            }
          }
       });
     }
-  }, [isLoaded, routeOrigin, routeDestination]); // routeOrigin/Dest only update every 20m/10m -> Stable logic
+  }, [isLoaded, routeOrigin, routeDestination]);
 
   const handleRecenter = () => {
      if (mapRef.current && filteredMyPos) {
         mapRef.current.panTo(filteredMyPos);
         mapRef.current.setZoom(19);
-        mapRef.current.panTo(filteredMyPos);
-        mapRef.current.setZoom(19);
-        setTrackingMode('heading'); // Resume heading tracking on recenter
+        setIsAutoFollowing(true);
+        setTrackingMode('heading');
      }
   };
 
@@ -307,7 +324,6 @@ const NavigationMode = () => {
 
   if (!isLoaded) return <div className="h-[100dvh] bg-black text-white flex center items-center justify-center">Loading...</div>;
 
-  // Icons refined with Anchors for perfect alignment
   const PATIENT_ICON_FG = {
       url: "https://cdn-icons-png.flaticon.com/512/684/684908.png", 
       scaledSize: new google.maps.Size(44, 44),
@@ -325,30 +341,35 @@ const NavigationMode = () => {
 
   return (
     <div className="relative w-full h-[100dvh] bg-gray-900 overflow-hidden font-sans" style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif' }}>
-       {/* Top Bar */}
       <div className="absolute top-4 left-4 right-4 md:left-8 md:right-8 z-30 bg-[#0F5338] text-white p-4 rounded-xl shadow-xl flex items-center justify-between min-h-[80px]">
-         <div className="flex items-start gap-3 md:gap-4">
-            <div className="mt-1">
-               <svg className="w-8 h-8 md:w-10 md:h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-               </svg>
-            </div>
-            <div>
-               <p className="text-xl md:text-2xl font-bold leading-tight tracking-wide">มุ่งหน้าทางตะวันตก</p>
-               <p className="text-base md:text-lg text-green-100 font-medium">เฉียงใต้</p>
-            </div>
-         </div>
-
+          <div className="flex items-start gap-3 md:gap-4">
+             <div className="mt-1">
+                <svg className="w-8 h-8 md:w-10 md:h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
+             </div>
+             <div>
+                <p className="text-xl md:text-2xl font-bold leading-tight tracking-wide">มุ่งหน้าตามเส้นทาง</p>
+                <p className="text-base md:text-lg text-green-100 font-medium">ระยะทาง {routeStats?.distance || '...'}</p>
+             </div>
+          </div>
       </div>
 
       <GoogleMap
         mapContainerStyle={MAP_CONTAINER_STYLE}
-        center={INITIAL_CENTER} // Initial only, controlled by panTo later
-        zoom={19}
+        center={INITIAL_CENTER} 
+        zoom={20}
         onLoad={onLoad}
-        options={{ disableDefaultUI: true, mapTypeId: mapType, tilt: 45, heading: trackingMode === 'heading' ? smoothHeading : 0, gestureHandling: "greedy" }}
+        onDragStart={handleMapDrag} 
+        options={{ 
+            disableDefaultUI: true, 
+            mapTypeId: mapType, 
+            tilt: 45, 
+            heading: trackingMode === 'heading' ? smoothHeading : 0, 
+            gestureHandling: "greedy",
+        }}
       >
-         {/* User Marker (Blue Arrow) */}
+         {/* User Marker */}
          {animatedMyPos && (
             <MarkerF
                position={animatedMyPos}
@@ -360,31 +381,27 @@ const NavigationMode = () => {
                   fillOpacity: 1,
                   strokeColor: "white",
                   strokeWeight: 2,
-                  rotation: smoothHeading, // Buffered smooth heading
+                  rotation: smoothHeading, 
                }}
                zIndex={100}
             />
          )}
 
-          {/* Patient Marker (Using LERP Animated Position) */}
+          {/* Patient Marker */}
           {animatedPatientPos && (
               <>
-                 {/* Layer 1: Glow (DOM Marker) */}
                  <MarkerF position={animatedPatientPos} icon={PATIENT_ICON_BG as any} zIndex={90} options={{optimized:false}} />
-                 {/* Layer 2: Pin (DOM Marker) */}
                  <MarkerF position={animatedPatientPos} icon={PATIENT_ICON_FG as any} zIndex={91} options={{optimized:false}} />
               </>
           )}
 
-         {/* Directions */}
          {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, polylineOptions: { strokeColor: "#4285F4", strokeWeight: 10, strokeOpacity: 0.9 }, preserveViewport: true }} />}
       </GoogleMap>
 
-      {/* Floating Buttons */}
       <div className="absolute right-4 top-32 md:top-36 flex flex-col gap-3 md:gap-4 z-30">
           <MapLayerControl mapType={mapType} setMapType={setMapType} />
           
-          {/* Compass Button - Rotates to point North, Click to toggle North Up */}
+           {/* Compass Button */}
           <div 
             onClick={() => setTrackingMode(prev => prev === 'heading' ? 'north' : 'heading')}
             className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 relative overflow-hidden transition-transform duration-300"
@@ -394,30 +411,34 @@ const NavigationMode = () => {
              <div className="absolute bottom-2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[14px] border-l-transparent border-r-transparent border-t-gray-300"></div>
           </div>
 
-          {/* Sound Button - Toggle Mute */}
           <div 
-             onClick={() => setIsMuted(!isMuted)}
-             className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50"
+             onClick={() => {
+                const newMuteState = !isMuted;
+                setIsMuted(newMuteState);
+                if (!newMuteState) speak("เปิดเสียงนำทาง");
+                else window.speechSynthesis.cancel();
+             }}
+             className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 bg-opacity-90 backdrop-blur"
           >
              {isMuted ? (
-                // Muted Icon
-                <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
                 </svg>
              ) : (
-                // Unmuted Icon
-                <svg className="w-5 h-5 md:w-6 md:h-6 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 md:w-6 md:h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                 </svg>
              )}
           </div>
       </div>
 
-      <div onClick={handleRecenter} className="absolute bottom-44 md:bottom-40 left-4 z-30 bg-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 cursor-pointer text-blue-600 font-bold text-sm tracking-wide hover:bg-gray-50 transition-colors">
-          <svg className="w-4 h-4 transform rotate-45" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
-          ปรับจุดกลาง
-      </div>
+      {!isAutoFollowing && (
+        <div onClick={handleRecenter} className="absolute bottom-44 md:bottom-40 left-4 z-30 bg-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 cursor-pointer text-blue-600 font-bold text-sm tracking-wide hover:bg-gray-50 transition-colors animate-fade-in-up">
+            <svg className="w-4 h-4 transform rotate-45" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
+            ปรับจุดกลาง
+        </div>
+      )}
 
       <div className="absolute bottom-0 left-0 w-full z-30 bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.2)] px-6 py-6 pb-safe md:pb-10 transition-transform duration-300">
          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4"></div>
@@ -446,4 +467,4 @@ const NavigationMode = () => {
   );
 }
 
-export default NavigationMode
+export default NavigationMode;

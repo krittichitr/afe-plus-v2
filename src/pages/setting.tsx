@@ -3,7 +3,8 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import axios from 'axios'
 
-import { GoogleMap, Marker, useLoadScript, InfoWindow, DrawingManager, Polygon, Circle } from '@react-google-maps/api';
+import { GoogleMap, Marker, InfoWindow, DrawingManager, Polygon, Circle } from '@react-google-maps/api';
+import { useGoogleMaps } from '@/providers/GoogleMapsProvider';
 import Spinner from 'react-bootstrap/Spinner';
 import Container from 'react-bootstrap/Container';
 import Row from 'react-bootstrap/Row';
@@ -36,8 +37,10 @@ interface SafezoneStage {
     safez_radiuslv1 : number
     safez_radiuslv2 : number
 }
+
 const Setting = () => {
     const router = useRouter();
+    const { isLoaded } = useGoogleMaps();
 
     const containerStyle = {
         width: '100vw',
@@ -129,9 +132,6 @@ const Setting = () => {
         setDataUser({ isLogin: false, userData: null, takecareData: null })
     }
 
-    const { isLoaded } = useLoadScript({
-        googleMapsApiKey: process.env.GoogleMapsApiKey as string
-    });
     const center = useMemo(() => ({ lat: location.latitude, lng: location.longitude }), [location]);
 
     const handleMarkerClick = (id: number, lat: number, lng: number, address: string) => {

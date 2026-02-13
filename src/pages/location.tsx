@@ -3,7 +3,8 @@ import { useRouter } from 'next/router'
 import axios from 'axios'
 import Link from 'next/link'
 
-import { GoogleMap, MarkerF, useLoadScript, InfoWindow, Circle, DirectionsRenderer } from '@react-google-maps/api';
+import { GoogleMap, MarkerF, InfoWindow, Circle, DirectionsRenderer } from '@react-google-maps/api';
+import { useGoogleMaps } from '@/providers/GoogleMapsProvider';
 import Spinner from 'react-bootstrap/Spinner';
 import { encrypt } from '@/utils/helpers'
 import MapLayerControl from '@/components/MapLayerControl'
@@ -40,9 +41,7 @@ interface DataUserState {
 
 const Location = () => {
     const router = useRouter();
-    const { isLoaded } = useLoadScript({
-        googleMapsApiKey: process.env.GoogleMapsApiKey as string
-    });
+    const { isLoaded } = useGoogleMaps();
 
     // --- State ---
     const [mapRef, setMapRef] = useState<google.maps.Map | null>(null);

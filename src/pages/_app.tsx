@@ -13,6 +13,7 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { useEffect, useState } from 'react';
 import LoadPage from '@/components/LayoutPage/LoadPage';
 import PageChange from '@/components/LayoutPage/PageChange';
+import { GoogleMapsProvider } from '@/providers/GoogleMapsProvider';
 
 const App = ({ Component, pageProps }: AppProps) => {
   const { title, description, slug, titleBar } = pageProps;
@@ -42,6 +43,7 @@ const App = ({ Component, pageProps }: AppProps) => {
       <Head>
         <link rel="icon" href="/favicon.ico" /> {/* เพิ่มการอ้างอิงถึงไอคอน */}
       </Head>
+      <GoogleMapsProvider>
       {
         isAdminRoute ? (
           <AuthProvider>
@@ -58,6 +60,7 @@ const App = ({ Component, pageProps }: AppProps) => {
           </MainLayouts>
         )
       }
+      </GoogleMapsProvider>
     </Provider>
   );
 };
