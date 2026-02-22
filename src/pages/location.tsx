@@ -53,13 +53,13 @@ const Location = () => {
     const [safezonePos, setSafezonePos] = useState({ lat: 0, lng: 0 }); // Was 'origin'
     const [patientPos, setPatientPos] = useState({ lat: 0, lng: 0 });   // Was 'destination'
     const [myPos, setMyPos] = useState<google.maps.LatLngLiteral | null>(null);
-    
+
     // UI/Map State
     const [heading, setHeading] = useState<number>(0);
     const [padding, setPadding] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
     const [range1, setRange1] = useState(10);
     const [range2, setRange2] = useState(20);
-    
+
     // Routing
     const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
     const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
@@ -67,6 +67,7 @@ const Location = () => {
 
     const [infoWindowData, setInfoWindowData] = useState({ id: 0, address: '', show: false });
     const [mapType, setMapType] = useState('roadmap');
+    const [autoFollow, setAutoFollow] = useState(true);
 
     // --- Effects ---
 
@@ -106,7 +107,7 @@ const Location = () => {
                 });
                 setRange1(data.safez_radiuslv1);
                 setRange2(data.safez_radiuslv2);
-                
+
                 // Also get initial location to be sure
                 onGetLocation(data, takecareData, userData);
             }
@@ -129,7 +130,7 @@ const Location = () => {
                 const encodedUsersId = encrypt(responseUser.data?.data.users_id.toString());
                 const responseTakecareperson = await axios.get(`${process.env.WEB_DOMAIN}/api/user/getUserTakecareperson/${encodedUsersId}`);
                 const data = responseTakecareperson.data?.data;
-                
+
                 if (data) {
                     setDataUser({ isLogin: true, userData: responseUser.data?.data, takecareData: data });
                     // Note: onGetSafezone is defined above, but we need to ensure it's accessible. 
@@ -153,7 +154,7 @@ const Location = () => {
     // 1. Calculate Padding (Bottom Center logic)
     useEffect(() => {
         if (typeof window !== "undefined") {
-            const topPad = window.innerHeight * 0.55; 
+            const topPad = window.innerHeight * 0.55;
             setPadding({ top: topPad, bottom: 150, left: 0, right: 0 });
         }
     }, []);
@@ -166,7 +167,7 @@ const Location = () => {
                 // @ts-ignore
                 setHeading(event.webkitCompassHeading);
             } else if (event.alpha) {
-                setHeading(360 - event.alpha); 
+                setHeading(360 - event.alpha);
             }
         };
         if (typeof window !== "undefined" && window.DeviceOrientationEvent) {
@@ -192,8 +193,8 @@ const Location = () => {
                     setHeading(gpsHeading);
                 }
 
-                // Follow Mode: Pan map to user
-                if (mapRef) {
+                // Follow Mode: Pan map to user ONLY if autoFollow is true
+                if (mapRef && autoFollow) {
                     mapRef.panTo(newPos);
                 }
             },
@@ -201,7 +202,7 @@ const Location = () => {
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
         return () => navigator.geolocation.clearWatch(watchId);
-    }, [mapRef]);
+    }, [mapRef, autoFollow]);
 
     // --- Helpers for Distance ---
     const toRad = (d: number) => (d * Math.PI) / 180;
@@ -212,19 +213,19 @@ const Location = () => {
         const Δφ = toRad(p2.lat - p1.lat);
         const Δλ = toRad(p2.lng - p1.lng);
         const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-                  Math.cos(φ1) * Math.cos(φ2) *
-                  Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
     };
 
     // 4. API Polling (Patient Location) - Dynamic Interval
     useEffect(() => {
-        if (!dataUser?.takecareData?.userData?.origin?.lat && !dataUser.isLogin) return; 
-        
+        if (!dataUser?.takecareData?.userData?.origin?.lat && !dataUser.isLogin) return;
+
         const fetchLocation = async () => {
             try {
-                 const url = `${process.env.WEB_DOMAIN}/api/location/getLocation?takecare_id=${dataUser.takecareData.takecare_id}&users_id=${dataUser.userData.users_id}`;
+                const url = `${process.env.WEB_DOMAIN}/api/location/getLocation?takecare_id=${dataUser.takecareData.takecare_id}&users_id=${dataUser.userData.users_id}`;
                 const resLocation = await axios.get(url);
 
                 if (resLocation.data?.data) {
@@ -248,8 +249,8 @@ const Location = () => {
             const Δφ = toRad(p2.lat - p1.lat);
             const Δλ = toRad(p2.lng - p1.lng);
             const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-                      Math.cos(φ1) * Math.cos(φ2) *
-                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
             return R * c;
         };
@@ -259,14 +260,15 @@ const Location = () => {
 
         // Determine Interval
         let intervalDuration = 3000; // Default: Fast (3s) for Safety/Outside
-        
+
         // Only switch to Slow (30s) if confirmed INSIDE safezone
         if (safezonePos.lat !== 0 && patientPos.lat !== 0) {
             const dist = getDistance(safezonePos, patientPos);
             if (dist <= range1) {
+                intervalDuration = 30000; // Inside Safezone: Slow (30s)
             } else {
                 intervalDuration = 3000; // Outside Safezone: Fast (3s)
-                 // console.log("Outside Safezone (" + Math.round(dist) + "m). Polling every 3s.");
+                // console.log("Outside Safezone (" + Math.round(dist) + "m). Polling every 3s.");
             }
         }
 
@@ -318,7 +320,7 @@ const Location = () => {
 
     return (
         <div className="relative h-screen w-full bg-gray-100 overflow-hidden font-sans" style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif' }}>
-             <div className="absolute inset-0 z-0">
+            <div className="absolute inset-0 z-0">
                 <GoogleMap
                     mapContainerStyle={CONTAINER_STYLE}
                     center={center}
@@ -330,15 +332,18 @@ const Location = () => {
                         heading: heading, // Dynamic Heading
                         tilt: 45, // 3D Perspective
                         padding: padding, // Offset for bottom sheet
-                        mapTypeId: mapType
+                        mapTypeId: mapType,
+                        gestureHandling: "greedy",
                     }}
+                    onDragStart={() => setAutoFollow(false)}
+                    onZoomChanged={() => setAutoFollow(false)}
                 >
                     {/* 1. My Location (Arrow) */}
                     {myPos && (
-                        <MarkerF 
-                            position={myPos} 
-                            icon={{ ...MY_LOC_ICON_OPT as any, rotation: heading }} 
-                            zIndex={2} 
+                        <MarkerF
+                            position={myPos}
+                            icon={{ ...MY_LOC_ICON_OPT as any, rotation: heading }}
+                            zIndex={2}
                         />
                     )}
 
@@ -346,10 +351,10 @@ const Location = () => {
                     {patientPos.lat !== 0 && (
                         <>
                             <MarkerF position={patientPos} icon={PATIENT_ICON_BG as any} zIndex={1} />
-                            <MarkerF 
-                                position={patientPos} 
-                                icon={PATIENT_ICON_FG as any} 
-                                zIndex={2} 
+                            <MarkerF
+                                position={patientPos}
+                                icon={PATIENT_ICON_FG as any}
+                                zIndex={2}
                                 onClick={() => handleMarkerClick(1, 'ผู้มีภาวะพึ่งพิง')}
                             >
                                 {infoWindowData.show && (
@@ -379,7 +384,7 @@ const Location = () => {
                                 scaledSize: new window.google.maps.Size(35, 35),
                             }}
                         >
-                             <>
+                            <>
                                 <Circle
                                     center={safezonePos}
                                     radius={range1}
@@ -394,8 +399,8 @@ const Location = () => {
                         </MarkerF>
                     )}
 
-                     {/* 4. Directions Route */}
-                     {directions && (
+                    {/* 4. Directions Route */}
+                    {directions && (
                         <DirectionsRenderer
                             directions={directions}
                             options={{
@@ -407,9 +412,9 @@ const Location = () => {
                     )}
 
                 </GoogleMap>
-             </div>
+            </div>
 
-              {/* Bottom Sheet UI */}
+            {/* Bottom Sheet UI */}
             <div className="absolute bottom-0 left-0 w-full z-30 pointer-events-none">
                 <div className="container mx-auto max-w-lg pointer-events-auto">
                     <div className="bg-white rounded-t-3xl shadow-[0_-5px_30px_rgba(0,0,0,0.15)] p-6 pb-10 animate-slide-up">
@@ -417,8 +422,8 @@ const Location = () => {
 
                         <div className="space-y-3">
                             {/* 1. In-App Navigation (Demo Style) */}
-                            <Link 
-                                href={`/navigation?idlocation=${router.query.idlocation || ''}&users_id=${dataUser.userData?.users_id || ''}&takecare_id=${dataUser.takecareData?.takecare_id || ''}&auToken=${router.query.auToken || ''}`} 
+                            <Link
+                                href={`/navigation?idlocation=${router.query.idlocation || ''}&users_id=${dataUser.userData?.users_id || ''}&takecare_id=${dataUser.takecareData?.takecare_id || ''}&auToken=${router.query.auToken || ''}`}
                                 className="block w-full text-decoration-none"
                             >
                                 <button className="w-full bg-[#0F5338] hover:bg-[#0A3D28] text-white py-4 px-6 rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-between group border-0">
@@ -434,9 +439,9 @@ const Location = () => {
                                     <svg className="w-6 h-6 text-white/70 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
                                 </button>
                             </Link>
-                            
+
                             {/* 2. External Map */}
-                            <button 
+                            <button
                                 onClick={handleEmergencyNav}
                                 className="w-full bg-gray-50 hover:bg-gray-100 text-gray-700 font-bold py-3 px-6 rounded-xl border border-gray-200 transition-all flex items-center justify-center gap-2"
                             >
@@ -449,6 +454,23 @@ const Location = () => {
             </div>
 
 
+            {/* Recenter Button */}
+            {!autoFollow && (
+                <div
+                    onClick={() => {
+                        setAutoFollow(true);
+                        if (myPos && mapRef) {
+                            mapRef.panTo(myPos);
+                            mapRef.setZoom(18);
+                        }
+                    }}
+                    className="absolute bottom-40 left-4 z-30 bg-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 cursor-pointer text-blue-600 font-bold text-sm tracking-wide hover:bg-gray-50 transition-colors animate-fade-in-up"
+                >
+                    <svg className="w-4 h-4 transform rotate-45" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
+                    ปรับจุดกลาง
+                </div>
+            )}
+
             {/* Map Layer Control */}
             <div className="absolute top-4 right-4 z-40">
                 <MapLayerControl mapType={mapType} setMapType={setMapType} />
@@ -456,9 +478,9 @@ const Location = () => {
 
             {/* Loading Overlay */}
             {isLoading && (
-                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-sm">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-sm">
                     <Spinner animation="border" variant="primary" />
-                 </div>
+                </div>
             )}
         </div>
     )

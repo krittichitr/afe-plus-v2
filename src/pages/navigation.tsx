@@ -5,14 +5,14 @@ import MapLayerControl from "@/components/MapLayerControl";
 import axios from 'axios';
 import { useRouter } from 'next/router';
 
-// Configuration
+// --- Configuration ---
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100dvh" };
 const INITIAL_CENTER = { lat: 13.7563, lng: 100.5018 };
-const POS_ANIMATION_DURATION = 800; // ms
-const MIN_MOVEMENT_THRESHOLD = 1.0; // meters
+const POS_ANIMATION_DURATION = 1000; // ms
 
 // --- Math Helpers ---
 const toRad = (d: number) => (d * Math.PI) / 180;
+const toDeg = (r: number) => (r * 180) / Math.PI;
 
 const getDistance = (p1: google.maps.LatLngLiteral, p2: google.maps.LatLngLiteral) => {
   const R = 6371e3;
@@ -25,11 +25,28 @@ const getDistance = (p1: google.maps.LatLngLiteral, p2: google.maps.LatLngLitera
   return R * c;
 };
 
-const lerp = (start: number, end: number, t: number) => start * (1 - t) + end * t;
+// Calculate Bearing (ทิศทาง) from two points (prev -> next)
+const getBearing = (from: google.maps.LatLngLiteral, to: google.maps.LatLngLiteral) => {
+    if (!from || !to) return 0;
+    const lat1 = toRad(from.lat);
+    const lat2 = toRad(to.lat);
+    const dLon = toRad(to.lng - from.lng);
+  
+    const y = Math.sin(dLon) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) -
+              Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    
+    let brng = toDeg(Math.atan2(y, x));
+    if (isNaN(brng)) return 0;
+    return (brng + 360) % 360;
+};
+
+const lerp = (start: number, end: number, t: number) => {
+    if (isNaN(start) || isNaN(end)) return end;
+    return start * (1 - t) + end * t;
+};
 
 // --- Hooks ---
-
-// 1. Smooth Position Hook
 function useAnimatedPosition(targetPos: google.maps.LatLngLiteral | null) {
   const [visualPos, setVisualPos] = useState<google.maps.LatLngLiteral | null>(targetPos);
   const prevPosRef = useRef<google.maps.LatLngLiteral | null>(targetPos);
@@ -53,13 +70,15 @@ function useAnimatedPosition(targetPos: google.maps.LatLngLiteral | null) {
       if (!prevPosRef.current || !targetPosRef.current) return;
       const elapsed = time - startTimeRef.current;
       const progress = Math.min(elapsed / POS_ANIMATION_DURATION, 1);
-      const ease = (t: number) => 1 - (1 - t) * (1 - t);
+      const ease = (t: number) => 1 - Math.pow(1 - t, 3); // Cubic ease out
       const t = ease(progress);
 
       const lat = lerp(prevPosRef.current.lat, targetPosRef.current.lat, t);
       const lng = lerp(prevPosRef.current.lng, targetPosRef.current.lng, t);
 
-      setVisualPos({ lat, lng });
+      if (!isNaN(lat) && !isNaN(lng)) {
+          setVisualPos({ lat, lng });
+      }
 
       if (progress < 1) {
         frameRef.current = requestAnimationFrame(animate);
@@ -76,55 +95,46 @@ function useAnimatedPosition(targetPos: google.maps.LatLngLiteral | null) {
   return visualPos;
 }
 
-// 2. Smooth Heading Hook
-function useBufferedHeading(rawHeading: number) {
-  const [visualHeading, setVisualHeading] = useState(rawHeading);
-  const bufferRef = useRef<number[]>([]);
-  const MAX_BUFFER = 5;
-
-  useEffect(() => {
-    const buffer = bufferRef.current;
-    if (rawHeading !== null && !isNaN(rawHeading)) {
-        buffer.push(rawHeading);
-        if (buffer.length > MAX_BUFFER) buffer.shift();
-    }
-    if (buffer.length === 0) return;
-
-    let sumSin = 0;
-    let sumCos = 0;
-    for (const h of buffer) {
-        sumSin += Math.sin(toRad(h));
-        sumCos += Math.cos(toRad(h));
-    }
-    const avgHeadingRad = Math.atan2(sumSin / buffer.length, sumCos / buffer.length);
-    let avgHeading = (avgHeadingRad * 180) / Math.PI;
-    if (avgHeading < 0) avgHeading += 360;
-
-    setVisualHeading(avgHeading);
-  }, [rawHeading]);
-
-  return visualHeading;
-}
-
 const NavigationMode = () => {
   const router = useRouter();
-  const { isLoaded } = useGoogleMaps(); // Global Loader
-  const [map, setMap] = useState<google.maps.Map | null>(null);
+  const { isLoaded } = useGoogleMaps();
+  const mapRef = useRef<google.maps.Map | null>(null);
 
   // -- State --
-  const [filteredMyPos, setFilteredMyPos] = useState<google.maps.LatLngLiteral | null>(null);
-  const [rawHeading, setRawHeading] = useState<number>(0);
+  const [myPos, setMyPos] = useState<google.maps.LatLngLiteral | null>(null); // Target GPS
+  const [bearing, setBearing] = useState<number>(0); // Logical Bearing
   const [patientPos, setPatientPos] = useState<google.maps.LatLngLiteral | null>(null);
-  const [mapType, setMapType] = useState('hybrid');
+  const [mapType, setMapType] = useState('roadmap');
   const [isMuted, setIsMuted] = useState(false);
-  const [trackingMode, setTrackingMode] = useState<'heading' | 'north'>('heading');
+  const [isFollowing, setIsFollowing] = useState(true);
 
   // -- Visuals --
-  const animatedMyPos = useAnimatedPosition(filteredMyPos);
+  // LERP Position for User
+  const animatedMyPos = useAnimatedPosition(myPos); 
+  // LERP Position for Patient
   const animatedPatientPos = useAnimatedPosition(patientPos);
-  const smoothHeading = useBufferedHeading(rawHeading);
 
-  // -- Routing --
+  // -- Heading Refs --
+  const headingRef = useRef<number>(0);
+  const smoothHeadingRef = useRef<number>(0);
+  const deviceHeadingRef = useRef<number>(0);
+  const speedRef = useRef<number>(0);
+
+  // DeviceOrientation — เข็มทิศตอนหยุดนิ่ง
+  useEffect(() => {
+    const handleOrientation = (e: any) => {
+      if (speedRef.current < 2) {
+        if (e.webkitCompassHeading !== undefined) {
+          deviceHeadingRef.current = e.webkitCompassHeading;
+        } else if (e.alpha !== null) {
+          deviceHeadingRef.current = (360 - e.alpha) % 360;
+        }
+        headingRef.current = deviceHeadingRef.current;
+      }
+    };
+    window.addEventListener("deviceorientation", handleOrientation, true);
+    return () => window.removeEventListener("deviceorientation", handleOrientation, true);
+  }, []);
   const [routeOrigin, setRouteOrigin] = useState<google.maps.LatLngLiteral | null>(null);
   const [routeDestination, setRouteDestination] = useState<google.maps.LatLngLiteral | null>(null);
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
@@ -132,116 +142,106 @@ const NavigationMode = () => {
 
   // Refs
   const lastRawPosRef = useRef<google.maps.LatLngLiteral | null>(null);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const lastRouteOriginRef = useRef<google.maps.LatLngLiteral | null>(null);
-  const lastRouteDestRef = useRef<google.maps.LatLngLiteral | null>(null);
+  const lastBearingRef = useRef<number>(0);
+  const lastInstructionRef = useRef<string>("");
 
   const onLoad = useCallback((mapInstance: google.maps.Map) => {
     mapRef.current = mapInstance;
-    setMap(mapInstance);
   }, []);
 
-  // -- Compass Logic --
-  const [compassHeading, setCompassHeading] = useState<number>(0);
-  const [gpsHeading, setGpsHeading] = useState<number | null>(null);
-  const [currentSpeed, setCurrentSpeed] = useState<number>(0);
-
-  useEffect(() => {
-      const shouldUseGPS = currentSpeed > 0.8 && gpsHeading !== null;
-      setRawHeading(shouldUseGPS ? gpsHeading! : compassHeading);
-  }, [compassHeading, gpsHeading, currentSpeed]);
-
-  useEffect(() => {
-    const handleOrientation = (event: DeviceOrientationEvent) => {
-        let heading = 0;
-        // @ts-ignore
-        if (event.webkitCompassHeading) {
-            // @ts-ignore
-            heading = event.webkitCompassHeading;
-        } else if (event.alpha) {
-            heading = 360 - event.alpha; 
-        }
-        setCompassHeading(heading);
-    };
-    if (typeof window !== "undefined" && window.DeviceOrientationEvent) {
-        window.addEventListener("deviceorientation", handleOrientation as any, true);
-    }
-    return () => {
-        if (typeof window !== "undefined") {
-            window.removeEventListener("deviceorientation", handleOrientation as any);
-        }
-    };
-  }, []);
-
-  // -- GPS Logic --
+  // -- 1. GPS LOGIC --
   useEffect(() => {
     if (!navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude, heading, speed } = pos.coords;
-        const newRawPos = { lat: latitude, lng: longitude };
-        
-        setCurrentSpeed(speed || 0);
-        if (heading !== null && !isNaN(heading)) setGpsHeading(heading);
+        const newPos = { lat: latitude, lng: longitude };
+        const spd = speed ?? 0;
+        speedRef.current = spd;
 
-        // Jitter Filter
-        if (lastRawPosRef.current) {
-           const dist = getDistance(lastRawPosRef.current, newRawPos);
-           if (dist < MIN_MOVEMENT_THRESHOLD) return;
+        // ใช้ GPS heading โดยตรงเมื่อเร็วพอ
+        if (heading !== null && spd >= 2) {
+          headingRef.current = heading;
+        }
+        // เมื่อช้า ใช้ bearing คำนวณจาก 2 จุด
+        else if (lastRawPosRef.current) {
+          const dist = getDistance(lastRawPosRef.current, newPos);
+          if (dist > 2.0) {
+            const calculatedBearing = getBearing(lastRawPosRef.current, newPos);
+            if (!isNaN(calculatedBearing)) {
+              headingRef.current = calculatedBearing;
+            }
+          }
         }
 
-        // Low-Pass
-        let alpha = 0.5; 
-        if (speed && speed > 10) alpha = 0.8; 
-        if (speed && speed < 1) alpha = 0.2; 
+        setBearing(headingRef.current);
+        lastBearingRef.current = headingRef.current;
+        setMyPos(newPos);
+        lastRawPosRef.current = newPos;
 
-        let filteredLat = newRawPos.lat;
-        let filteredLng = newRawPos.lng;
-
-        if (lastRawPosRef.current) {
-            filteredLat = lerp(lastRawPosRef.current.lat, newRawPos.lat, alpha);
-            filteredLng = lerp(lastRawPosRef.current.lng, newRawPos.lng, alpha);
-        }
-        const newFilteredPos = { lat: filteredLat, lng: filteredLng };
-        lastRawPosRef.current = newFilteredPos; 
-        setFilteredMyPos(newFilteredPos); 
-
-        // Route Origin Update
-        if (!lastRouteOriginRef.current || getDistance(lastRouteOriginRef.current, newFilteredPos) > 20) {
-            setRouteOrigin(newFilteredPos);
-            lastRouteOriginRef.current = newFilteredPos;
+        if (!routeOrigin || getDistance(routeOrigin, newPos) > 30) {
+          setRouteOrigin(newPos);
         }
       },
-      (err) => console.error("Geolocation Error:", err.code, err.message),
+      (err) => console.error("GPS Error:", err),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+  }, [routeOrigin]);
 
-  // -- Auto Follow Logic --
-  const [isAutoFollowing, setIsAutoFollowing] = useState(true);
-
+  // -- 2. CAMERA & MAP CONTROL --
   useEffect(() => {
-    if (isAutoFollowing && mapRef.current && animatedMyPos && window.google) {
-      let targetCenter = animatedMyPos;
-      if (trackingMode === 'heading') {
-          const metersPerPx = 156543.03392 * Math.cos(animatedMyPos.lat * Math.PI / 180) / Math.pow(2, 20);
-          const screenOffsetPx = window.innerHeight * 0.35; 
-          const offsetMeters = screenOffsetPx * metersPerPx;
-          
-          if (window.google && window.google.maps.geometry) {
-             const p = window.google.maps.geometry.spherical.computeOffset(animatedMyPos, offsetMeters, smoothHeading);
-             targetCenter = { lat: p.lat(), lng: p.lng() };
-          }
-      }
-      mapRef.current.panTo(targetCenter);
-      if (trackingMode === 'heading') {
-        mapRef.current.setHeading(smoothHeading);
+    if (!isFollowing || !mapRef.current || !animatedMyPos || !window.google) return;
+
+    // Smooth heading ด้วย lerp ป้องกันกระตุก
+    const lerpAngle = (a: number, b: number, t: number) => {
+      let diff = b - a;
+      if (diff > 180) diff -= 360;
+      if (diff < -180) diff += 360;
+      return a + diff * t;
+    };
+
+    smoothHeadingRef.current = lerpAngle(smoothHeadingRef.current, headingRef.current, 0.1);
+    const currentBearing = isNaN(smoothHeadingRef.current) ? 0 : smoothHeadingRef.current;
+
+    const OFFSET_METERS = 80;
+
+    if (window.google.maps.geometry) {
+      const cameraCenter = window.google.maps.geometry.spherical.computeOffset(
+        animatedMyPos,
+        OFFSET_METERS,
+        currentBearing
+      );
+
+      if (cameraCenter && isFinite(cameraCenter.lat()) && isFinite(cameraCenter.lng())) {
+        try {
+          mapRef.current.moveCamera({
+            center: cameraCenter,
+            heading: currentBearing,
+            tilt: 45,
+            zoom: 19,
+          });
+        } catch (e) {
+          console.error("Camera Move Error:", e);
+        }
       }
     }
-  }, [animatedMyPos, smoothHeading, isAutoFollowing, trackingMode]);
+  }, [animatedMyPos, isFollowing]);
 
-  const handleMapDrag = () => setIsAutoFollowing(false);
+  const handleMapDrag = () => {
+      // Allow user to pan away
+      setIsFollowing(false);
+  };
+
+  const handleRecenter = () => {
+     setIsFollowing(true);
+     // Instant snap back
+     if (myPos && mapRef.current) {
+        // Trigger effect will handle the rest, but we can do an initial move
+        // to prevent waiting for next animation frame
+        mapRef.current.moveCamera({ center: myPos, zoom: 19, heading: bearing, tilt: 45 });
+     }
+  };
 
   // -- Patient Polling --
   useEffect(() => {
@@ -263,20 +263,15 @@ const NavigationMode = () => {
     return () => clearInterval(interval);
   }, [router.isReady, router.query]);
 
-  // -- Voice --
-  const lastInstructionRef = useRef<string>("");
-  const isMutedRef = useRef(isMuted);
-  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
-
+  // -- Voice & Routing --
   const speak = (text: string) => {
-     if (isMutedRef.current || typeof window === 'undefined') return;
+     if (isMuted || typeof window === 'undefined') return;
      window.speechSynthesis.cancel();
      const utterance = new SpeechSynthesisUtterance(text);
      utterance.lang = 'th-TH'; 
      window.speechSynthesis.speak(utterance);
   };
 
-  // -- Directions --
   useEffect(() => {
     if (isLoaded && routeOrigin && routeDestination) {
       const ds = new google.maps.DirectionsService();
@@ -302,15 +297,6 @@ const NavigationMode = () => {
     }
   }, [isLoaded, routeOrigin, routeDestination]);
 
-  const handleRecenter = () => {
-     if (mapRef.current && filteredMyPos) {
-        mapRef.current.panTo(filteredMyPos);
-        mapRef.current.setZoom(19);
-        setIsAutoFollowing(true);
-        setTrackingMode('heading');
-     }
-  };
-
   const getArrivalTime = () => {
      if (!routeStats) return "--:--";
      const match = routeStats.duration.match(/(\d+)/);
@@ -331,16 +317,13 @@ const NavigationMode = () => {
   };
   const PATIENT_ICON_BG = {
       path: "M 0,0 C -2,-20 -10,-22 -10,-30 A 10,10 0 1,1 10,-30 C 10,-22 2,-20 0,0 z",
-      fillColor: "white",
-      fillOpacity: 1,
-      strokeColor: "white",
-      strokeWeight: 4, 
-      scale: 1.2,
-      anchor: new google.maps.Point(0, 0)
+      fillColor: "white", fillOpacity: 1, strokeColor: "white", strokeWeight: 4, scale: 1.2, anchor: new google.maps.Point(0, 0)
   };
 
   return (
-    <div className="relative w-full h-[100dvh] bg-gray-900 overflow-hidden font-sans" style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif' }}>
+    <div className="relative w-full h-[100dvh] bg-gray-900 overflow-hidden font-sans">
+      
+      {/* --- Top Header --- */}
       <div className="absolute top-4 left-4 right-4 md:left-8 md:right-8 z-30 bg-[#0F5338] text-white p-4 rounded-xl shadow-xl flex items-center justify-between min-h-[80px]">
           <div className="flex items-start gap-3 md:gap-4">
              <div className="mt-1">
@@ -358,16 +341,15 @@ const NavigationMode = () => {
       <GoogleMap
         mapContainerStyle={MAP_CONTAINER_STYLE}
         center={INITIAL_CENTER} 
-        zoom={20}
+        zoom={19}
         onLoad={onLoad}
         onDragStart={handleMapDrag} 
         options={{ 
             disableDefaultUI: true, 
             mapTypeId: mapType, 
-            tilt: 45, 
-            heading: trackingMode === 'heading' ? smoothHeading : 0, 
             gestureHandling: "greedy",
         }}
+        // Note: initial tilt/heading handled by moveCamera in effect
       >
          {/* User Marker */}
          {animatedMyPos && (
@@ -381,7 +363,7 @@ const NavigationMode = () => {
                   fillOpacity: 1,
                   strokeColor: "white",
                   strokeWeight: 2,
-                  rotation: smoothHeading, 
+                  rotation: bearing, // Rotate arrow with bearing
                }}
                zIndex={100}
             />
@@ -398,26 +380,13 @@ const NavigationMode = () => {
          {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, polylineOptions: { strokeColor: "#4285F4", strokeWeight: 10, strokeOpacity: 0.9 }, preserveViewport: true }} />}
       </GoogleMap>
 
+      {/* --- Controls --- */}
       <div className="absolute right-4 top-32 md:top-36 flex flex-col gap-3 md:gap-4 z-30">
           <MapLayerControl mapType={mapType} setMapType={setMapType} />
           
-           {/* Compass Button */}
+           {/* Mute Button */}
           <div 
-            onClick={() => setTrackingMode(prev => prev === 'heading' ? 'north' : 'heading')}
-            className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 relative overflow-hidden transition-transform duration-300"
-            style={{ transform: `rotate(${-1 * (trackingMode === 'heading' ? smoothHeading : 0)}deg)` }}
-          >
-             <div className="absolute top-2 w-0 h-0 border-l-[5px] border-r-[5px] border-b-[14px] border-l-transparent border-r-transparent border-b-red-600"></div>
-             <div className="absolute bottom-2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[14px] border-l-transparent border-r-transparent border-t-gray-300"></div>
-          </div>
-
-          <div 
-             onClick={() => {
-                const newMuteState = !isMuted;
-                setIsMuted(newMuteState);
-                if (!newMuteState) speak("เปิดเสียงนำทาง");
-                else window.speechSynthesis.cancel();
-             }}
+             onClick={() => setIsMuted(!isMuted)}
              className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-full shadow-lg flex items-center justify-center cursor-pointer hover:bg-gray-50 bg-opacity-90 backdrop-blur"
           >
              {isMuted ? (
@@ -433,13 +402,15 @@ const NavigationMode = () => {
           </div>
       </div>
 
-      {!isAutoFollowing && (
+      {/* Recenter Button */}
+      {!isFollowing && (
         <div onClick={handleRecenter} className="absolute bottom-44 md:bottom-40 left-4 z-30 bg-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 cursor-pointer text-blue-600 font-bold text-sm tracking-wide hover:bg-gray-50 transition-colors animate-fade-in-up">
             <svg className="w-4 h-4 transform rotate-45" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
             ปรับจุดกลาง
         </div>
       )}
 
+      {/* --- Bottom Sheet --- */}
       <div className="absolute bottom-0 left-0 w-full z-30 bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.2)] px-6 py-6 pb-safe md:pb-10 transition-transform duration-300">
          <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4"></div>
          <div className="flex items-center justify-between">
