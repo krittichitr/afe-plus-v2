@@ -137,6 +137,7 @@ export default function NavigationPage() {
       pitch: 60,
       bearing: 0,
       attributionControl: false,
+      cooperativeGestures: false,
     });
 
     const setupLayers = () => {
@@ -286,13 +287,13 @@ export default function NavigationPage() {
 
       // Camera follow
       if (!isUserPanning && smoothUserPosRef.current) {
-        const offsetY = Math.round(window.innerHeight * 0.2);
+        const topPadding = Math.round(window.innerHeight * 0.35);
         map.current.jumpTo({
           center: [smoothUserPosRef.current.lng, smoothUserPosRef.current.lat],
           bearing: smoothHeadingRef.current,
           pitch: 60,
           zoom: 18,
-          padding: { top: 0, bottom: offsetY, left: 0, right: 0 }
+          padding: { top: topPadding, bottom: 0, left: 0, right: 0 }
         });
       }
 
@@ -558,13 +559,13 @@ export default function NavigationPage() {
     setIsUserPanning(true);
     if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
     if (map.current && userPosRef.current) {
-      const offsetY = Math.round(window.innerHeight * 0.2);
+      const topPadding = Math.round(window.innerHeight * 0.35);
       map.current.easeTo({
         center: [userPosRef.current.lng, userPosRef.current.lat],
         zoom: 18,
         bearing: smoothHeadingRef.current,
         pitch: 60,
-        offset: [0, offsetY],
+        padding: { top: topPadding, bottom: 0, left: 0, right: 0 },
         duration: 800,
       });
 
@@ -582,7 +583,7 @@ export default function NavigationPage() {
 
       {/* ===== TOP BANNER ===== */}
       <div className="absolute top-0 left-0 right-0 z-20 px-3 pt-3">
-        <div className="bg-[#0F5338] rounded-2xl shadow-2xl px-4 py-4 flex items-center gap-3 min-h-[88px]">
+        <div className="bg-[#0F5338] rounded-2xl shadow-2xl px-4 py-3 flex items-center gap-3 min-h-[72px]">
           {/* ไอคอน + ระยะทาง */}
           <div className="shrink-0 flex flex-col items-center gap-1 w-14">
             {getManeuverIcon(maneuverType, maneuverModifier)}
@@ -602,32 +603,7 @@ export default function NavigationPage() {
       </div>
 
       {/* ===== RIGHT BUTTONS ===== */}
-      <div className="absolute right-3 z-20 flex flex-col gap-3" style={{ top: "180px" }}>
-        {/* เข็มทิศ */}
-        <button
-          onClick={() => {
-            setIsUserPanning(true);
-            if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
-            if (map.current) {
-              map.current.easeTo({
-                bearing: 0,
-                pitch: 0,
-                duration: 800
-              });
-            }
-            // กลับมา track หลัง animation จบ
-            panTimeoutRef.current = setTimeout(() => {
-              if (isMountedRef.current) setIsUserPanning(false);
-            }, 900);
-          }}
-          className="w-12 h-12 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform"
-        >
-          <svg className="w-7 h-7" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="11" fill="white" stroke="#e5e7eb" strokeWidth="1" />
-            <path d="M12 4L9.5 12h5L12 4Z" fill="#EA4335" />
-            <path d="M12 20L14.5 12h-5L12 20Z" fill="#9ca3af" />
-          </svg>
-        </button>
+      <div className="absolute right-3 z-20 flex flex-col gap-3" style={{ top: "160px" }}>
         {/* ปุ่มเลเยอร์ */}
         <button
           onClick={() => setIsLayerModalOpen(true)}
@@ -707,9 +683,8 @@ export default function NavigationPage() {
       )}
 
       {/* ===== BOTTOM SHEET ===== */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-white rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.15)] pt-3 pb-8 px-6">
-        <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
-        <div className="flex items-center justify-between gap-3 mt-4">
+      <div className="absolute bottom-0 left-0 right-0 z-20 bg-white rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.15)] pt-4 pb-6 px-6">
+        <div className="flex items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-[34px] font-extrabold text-[#188038] tracking-tight leading-none">{durationMin}</span>
@@ -725,7 +700,7 @@ export default function NavigationPage() {
             </p>
           </div>
           <div className="flex items-center">
-            <Link href="/">
+            <Link href={`/location?users_id=${router.query.users_id || ''}&takecare_id=${router.query.takecare_id || ''}&idlocation=${router.query.idlocation || ''}&idsafezone=${router.query.idsafezone || ''}`}>
               <button className="bg-[#EA4335] text-white font-bold text-[17px] h-12 px-8 rounded-full shadow-sm active:scale-95 transition-all outline-none border-none">
                 ออก
               </button>
