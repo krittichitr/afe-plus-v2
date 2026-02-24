@@ -287,7 +287,7 @@ export default function NavigationPage() {
 
       // Camera follow
       if (!isUserPanning && smoothUserPosRef.current) {
-        const topPadding = Math.round(window.innerHeight * 0.35);
+        const topPadding = Math.round(window.innerHeight * 0.55);
         map.current.jumpTo({
           center: [smoothUserPosRef.current.lng, smoothUserPosRef.current.lat],
           bearing: smoothHeadingRef.current,
@@ -559,7 +559,7 @@ export default function NavigationPage() {
     setIsUserPanning(true);
     if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
     if (map.current && userPosRef.current) {
-      const topPadding = Math.round(window.innerHeight * 0.35);
+      const topPadding = Math.round(window.innerHeight * 0.55);
       map.current.easeTo({
         center: [userPosRef.current.lng, userPosRef.current.lat],
         zoom: 18,
