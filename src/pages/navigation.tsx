@@ -1,19 +1,25 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
-import { GoogleMap, DirectionsRenderer, MarkerF } from "@react-google-maps/api";
+"use client";
+
+import { useEffect, useRef, useState, useCallback } from "react";
+import { GoogleMap, DirectionsRenderer } from "@react-google-maps/api";
 import { useGoogleMaps } from "@/providers/GoogleMapsProvider";
-import MapLayerControl from "@/components/MapLayerControl";
-import axios from 'axios';
-import { useRouter } from 'next/router';
+import { useRouter } from "next/router";
+import axios from "axios";
+import Link from "next/link";
 
 const MAP_CONTAINER_STYLE = { width: "100%", height: "100dvh" };
-const INITIAL_CENTER = { lat: 13.7563, lng: 100.5018 };
 
-const toRad = (d: number) => (d * Math.PI) / 180;
-const toDeg = (r: number) => (r * 180) / Math.PI;
-
-const lerp = (a: number, b: number, t: number) => {
-  if (isNaN(a) || isNaN(b)) return b;
-  return a + (b - a) * t;
+// --- Math Helpers ---
+const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371e3;
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLon = (lon2 - lon1) * rad;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 };
 
 const lerpAngle = (a: number, b: number, t: number) => {
@@ -23,311 +29,546 @@ const lerpAngle = (a: number, b: number, t: number) => {
   return a + diff * t;
 };
 
-const getDistance = (p1: google.maps.LatLngLiteral, p2: google.maps.LatLngLiteral) => {
-  const R = 6371e3;
-  const φ1 = toRad(p1.lat), φ2 = toRad(p2.lat);
-  const Δφ = toRad(p2.lat - p1.lat), Δλ = toRad(p2.lng - p1.lng);
-  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+// Map Google maneuver string → type/modifier for icon
+const parseGoogleManeuver = (maneuver: string) => {
+  const m = (maneuver || "").toLowerCase();
+  let modifier = "";
+  if (m.includes("left")) modifier = "left";
+  else if (m.includes("right")) modifier = "right";
+  if (m.includes("uturn") || m.includes("u-turn")) modifier = "uturn";
+  return { type: m, modifier };
 };
 
-const getBearing = (from: google.maps.LatLngLiteral, to: google.maps.LatLngLiteral) => {
-  const lat1 = toRad(from.lat), lat2 = toRad(to.lat);
-  const dLon = toRad(to.lng - from.lng);
-  const y = Math.sin(dLon) * Math.cos(lat2);
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-  const b = toDeg(Math.atan2(y, x));
-  return isNaN(b) ? 0 : (b + 360) % 360;
+const getManeuverIcon = (type: string, modifier: string) => {
+  const cls = "w-[44px] h-[44px] text-white";
+  if (modifier?.includes("left")) {
+    return (<svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l-6-6 6-6" /><path d="M3 12h10a4 4 0 0 1 4 4v2" /></svg>);
+  }
+  if (modifier?.includes("right")) {
+    return (<svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l6-6-6-6" /><path d="M21 12H11a4 4 0 0 0-4 4v2" /></svg>);
+  }
+  if (modifier?.includes("uturn") || type?.includes("u-turn")) {
+    return (<svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14l-4-4 4-4" /><path d="M5 10h11a4 4 0 0 1 0 8h-1" /></svg>);
+  }
+  return (<svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20V4" /><path d="M5 11l7-7 7 7" /></svg>);
 };
 
-// Smooth 60fps marker animation
-function useSmoothPosition(targetPos: google.maps.LatLngLiteral | null) {
-  const smoothRef = useRef<google.maps.LatLngLiteral | null>(null);
-  const [visual, setVisual] = useState<google.maps.LatLngLiteral | null>(null);
-  const frameRef = useRef<number>(0);
-  const targetRef = useRef<google.maps.LatLngLiteral | null>(null);
-
-  useEffect(() => {
-    targetRef.current = targetPos;
-    if (!smoothRef.current && targetPos) {
-      smoothRef.current = { ...targetPos };
-      setVisual(targetPos);
-      return;
-    }
-    const animate = () => {
-      if (!smoothRef.current || !targetRef.current) return;
-      smoothRef.current = {
-        lat: lerp(smoothRef.current.lat, targetRef.current.lat, 0.08),
-        lng: lerp(smoothRef.current.lng, targetRef.current.lng, 0.08),
-      };
-      setVisual({ ...smoothRef.current });
-      frameRef.current = requestAnimationFrame(animate);
-    };
-    if (frameRef.current) cancelAnimationFrame(frameRef.current);
-    frameRef.current = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frameRef.current);
-  }, [targetPos]);
-
-  return visual;
-}
-
-const getManeuverIcon = (instruction: string) => {
-  const txt = instruction.toLowerCase();
-  if (txt.includes("ซ้าย") || txt.includes("left"))
-    return <svg className="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l-6-6 6-6" /><path d="M3 12h10a4 4 0 0 1 4 4v2" /></svg>;
-  if (txt.includes("ขวา") || txt.includes("right"))
-    return <svg className="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l6-6-6-6" /><path d="M21 12H11a4 4 0 0 0-4 4v2" /></svg>;
-  return <svg className="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20V4" /><path d="M5 11l7-7 7 7" /></svg>;
-};
-
-const NavigationMode = () => {
+// =============================================================================
+export default function NavigationPage() {
   const router = useRouter();
   const { isLoaded } = useGoogleMaps();
   const mapRef = useRef<google.maps.Map | null>(null);
 
-  const [myPos, setMyPos] = useState<google.maps.LatLngLiteral | null>(null);
-  const [patientPos, setPatientPos] = useState<google.maps.LatLngLiteral | null>(null);
-  const [mapType, setMapType] = useState('satellite');
-  const [isMuted, setIsMuted] = useState(false);
-  const [isFollowing, setIsFollowing] = useState(true);
+  // UI State
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [isUserPanning, setIsUserPanning] = useState(false);
+  const [instruction, setInstruction] = useState("กำลังค้นหาเส้นทาง...");
+  const [maneuverType, setManeuverType] = useState("straight");
+  const [maneuverModifier, setManeuverModifier] = useState("");
+  const [stepDistance, setStepDistance] = useState("--");
+  const [totalDistance, setTotalDistance] = useState("--");
+  const [durationMin, setDurationMin] = useState("--");
+  const [arrivalTime, setArrivalTime] = useState("--:--");
   const [speedKmh, setSpeedKmh] = useState(0);
   const [hasLocation, setHasLocation] = useState(false);
-  const [currentInstruction, setCurrentInstruction] = useState("กำลังค้นหาเส้นทาง...");
-  const [stepDistance, setStepDistance] = useState("--");
-  const [routeStats, setRouteStats] = useState<{ duration: string; distance: string } | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [mapStyle, setMapStyle] = useState("roadmap");
+  const [isLayerModalOpen, setIsLayerModalOpen] = useState(false);
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
-  const [routeOrigin, setRouteOrigin] = useState<google.maps.LatLngLiteral | null>(null);
-  const [routeDestination, setRouteDestination] = useState<google.maps.LatLngLiteral | null>(null);
 
-  const animatedMyPos = useSmoothPosition(myPos);
-  const animatedPatientPos = useSmoothPosition(patientPos);
+  // Voice Refs
+  const isMutedRef = useRef(false);
+  const lastSpokenRef = useRef({ id: "", phase: 99 });
 
+  // Refs
+  const userMarkerRef = useRef<google.maps.Marker | null>(null);
+  const patientMarkerRef = useRef<google.maps.Marker | null>(null);
+  const userPosRef = useRef<{ lat: number; lng: number } | null>(null);
+  const patientPosRef = useRef<{ lat: number; lng: number } | null>(null);
   const headingRef = useRef<number>(0);
   const smoothHeadingRef = useRef<number>(0);
   const speedRef = useRef<number>(0);
-  const lastRawPosRef = useRef<google.maps.LatLngLiteral | null>(null);
-  const lastInstructionRef = useRef<string>("");
+
+  const lastRouteFetchUserPosRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastRouteFetchPatientPosRef = useRef<{ lat: number; lng: number } | null>(null);
+
+  const animFrameRef = useRef<number | null>(null);
   const panTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
 
+  // Smooth marker animation refs
+  const smoothUserPosRef = useRef<{ lat: number; lng: number } | null>(null);
+  const smoothPatientPosRef = useRef<{ lat: number; lng: number } | null>(null);
+
   useEffect(() => {
     isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
+    return () => {
+      isMountedRef.current = false;
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      userMarkerRef.current?.setMap(null);
+      patientMarkerRef.current?.setMap(null);
+    };
   }, []);
 
-  const onLoad = useCallback((m: google.maps.Map) => { mapRef.current = m; }, []);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
 
-  // DeviceOrientation
+  // Apply map style changes
   useEffect(() => {
-    const fn = (e: any) => {
+    if (mapRef.current) mapRef.current.setMapTypeId(mapStyle);
+  }, [mapStyle]);
+
+  const speak = useCallback((text: string) => {
+    if (isMutedRef.current || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "th-TH";
+    utter.rate = 1.0;
+    window.speechSynthesis.speak(utter);
+  }, []);
+
+  const onLoad = useCallback((m: google.maps.Map) => {
+    mapRef.current = m;
+    setIsMapReady(true);
+  }, []);
+
+  // --- DeviceOrientation ---
+  useEffect(() => {
+    const handleOrientation = (e: any) => {
       if (speedRef.current < 2) {
         if (e.webkitCompassHeading !== undefined) headingRef.current = e.webkitCompassHeading;
         else if (e.alpha !== null) headingRef.current = (360 - e.alpha) % 360;
       }
     };
-    window.addEventListener("deviceorientation", fn, true);
-    return () => window.removeEventListener("deviceorientation", fn, true);
+    window.addEventListener("deviceorientation", handleOrientation, true);
+    return () => window.removeEventListener("deviceorientation", handleOrientation, true);
   }, []);
 
-  // GPS
+  // --- Camera Loop 60fps (smooth marker + camera) ---
   useEffect(() => {
-    if (!navigator.geolocation) return;
-    const id = navigator.geolocation.watchPosition(
+    if (!isMapReady) return;
+
+    const tick = () => {
+      if (!mapRef.current) { animFrameRef.current = requestAnimationFrame(tick); return; }
+
+      smoothHeadingRef.current = lerpAngle(smoothHeadingRef.current, headingRef.current, 0.08);
+
+      // Smooth user marker position (ไหลลื่นเหมือนลอยน้ำ)
+      if (userPosRef.current) {
+        if (!smoothUserPosRef.current) {
+          smoothUserPosRef.current = { ...userPosRef.current };
+        } else {
+          smoothUserPosRef.current.lat = lerp(smoothUserPosRef.current.lat, userPosRef.current.lat, 0.04);
+          smoothUserPosRef.current.lng = lerp(smoothUserPosRef.current.lng, userPosRef.current.lng, 0.04);
+        }
+        userMarkerRef.current?.setPosition(smoothUserPosRef.current);
+        if (userMarkerRef.current) {
+          const icon = userMarkerRef.current.getIcon() as google.maps.Symbol;
+          if (icon) userMarkerRef.current.setIcon({ ...icon, rotation: smoothHeadingRef.current });
+        }
+      }
+
+      // Smooth patient marker position
+      if (patientPosRef.current) {
+        if (!smoothPatientPosRef.current) {
+          smoothPatientPosRef.current = { ...patientPosRef.current };
+        } else {
+          smoothPatientPosRef.current.lat = lerp(smoothPatientPosRef.current.lat, patientPosRef.current.lat, 0.02);
+          smoothPatientPosRef.current.lng = lerp(smoothPatientPosRef.current.lng, patientPosRef.current.lng, 0.02);
+        }
+        patientMarkerRef.current?.setPosition(smoothPatientPosRef.current);
+      }
+
+      // Camera follow
+      if (!isUserPanning && smoothUserPosRef.current && window.google?.maps?.geometry) {
+        const center = window.google.maps.geometry.spherical.computeOffset(
+          new google.maps.LatLng(smoothUserPosRef.current.lat, smoothUserPosRef.current.lng),
+          130, smoothHeadingRef.current
+        );
+        if (center && isFinite(center.lat()) && isFinite(center.lng())) {
+          try { mapRef.current.moveCamera({ center, heading: smoothHeadingRef.current, tilt: 45, zoom: 19 }); } catch (e) { }
+        }
+      }
+
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    animFrameRef.current = requestAnimationFrame(tick);
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
+  }, [isMapReady, isUserPanning]);
+
+  // --- Fetch Route (Google Directions Service) ---
+  const fetchRoute = useCallback((
+    start: { lat: number; lng: number },
+    end: { lat: number; lng: number },
+    force = false
+  ) => {
+    if (!isLoaded) return;
+    if (!force && lastRouteFetchUserPosRef.current && lastRouteFetchPatientPosRef.current) {
+      const userMoved = haversineDistance(lastRouteFetchUserPosRef.current.lat, lastRouteFetchUserPosRef.current.lng, start.lat, start.lng);
+      const patientMoved = haversineDistance(lastRouteFetchPatientPosRef.current.lat, lastRouteFetchPatientPosRef.current.lng, end.lat, end.lng);
+      if (userMoved < 15 && patientMoved < 15) return;
+    }
+
+    const ds = new google.maps.DirectionsService();
+    ds.route(
+      { origin: start, destination: end, travelMode: google.maps.TravelMode.DRIVING },
+      (res, status) => {
+        if (status !== "OK" || !res || !isMountedRef.current) return;
+        setDirections(res);
+        const leg = res.routes[0].legs[0];
+
+        const distValue = leg.distance?.value || 0;
+        const distKm = distValue >= 1000 ? `${(distValue / 1000).toFixed(1)} กม.` : `${Math.round(distValue)} ม.`;
+        const durMin = Math.ceil((leg.duration?.value || 0) / 60);
+        const arrival = new Date(Date.now() + (leg.duration?.value || 0) * 1000)
+          .toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+
+        setTotalDistance(leg.distance?.text || distKm);
+        setDurationMin(String(durMin));
+        setArrivalTime(arrival);
+
+        if (leg.steps?.length > 0) {
+          const currentStep = leg.steps[0];
+          const nextStep = leg.steps[1];
+          const activeStep = nextStep || currentStep;
+          const distReal = currentStep.distance?.value || 0;
+
+          const stepDistText = distReal >= 1000
+            ? `${(distReal / 1000).toFixed(1)} กม.`
+            : `${Math.round(distReal)} ม.`;
+
+          const { type, modifier } = parseGoogleManeuver(activeStep.maneuver || "");
+          const cleanInstruction = (activeStep.instructions || "").replace(/<[^>]+>/g, "");
+          let bannerText = cleanInstruction || "มุ่งตรงไป";
+          if (nextStep && distReal > 50) bannerText = `อีก ${stepDistText} ${cleanInstruction}`;
+
+          setStepDistance(stepDistText);
+          setInstruction(bannerText);
+          setManeuverType(type);
+          setManeuverModifier(modifier);
+
+          // Voice Logic (phase system: 2km → 500m → 100m)
+          const turnId = activeStep.maneuver || cleanInstruction || "end";
+          if (turnId !== lastSpokenRef.current.id) {
+            lastSpokenRef.current.id = turnId;
+            let initialPhase = 4;
+            if (distReal <= 100) initialPhase = 0;
+            else if (distReal <= 500) initialPhase = 1;
+            else if (distReal <= 2000) initialPhase = 2;
+            else initialPhase = 3;
+            lastSpokenRef.current.phase = initialPhase;
+            speak(bannerText.replace("กม.", "กิโลเมตร").replace("ม.", "เมตร"));
+          } else {
+            let phase = lastSpokenRef.current.phase;
+            let shouldSpeak = false, prefix = "";
+            if (distReal <= 100 && phase > 0) { phase = 0; shouldSpeak = true; }
+            else if (distReal <= 500 && phase > 1) { prefix = "อีก 500 เมตร"; phase = 1; shouldSpeak = true; }
+            else if (distReal <= 2000 && phase > 2) { prefix = "อีก 2 กิโลเมตร"; phase = 2; shouldSpeak = true; }
+            if (shouldSpeak) {
+              lastSpokenRef.current.phase = phase;
+              const msg = prefix ? `${prefix} ${cleanInstruction}` : (cleanInstruction || "ตรงไป");
+              speak(msg.replace("กม.", "กิโลเมตร").replace("ม.", "เมตร"));
+            }
+          }
+        }
+
+        lastRouteFetchUserPosRef.current = { ...start };
+        lastRouteFetchPatientPosRef.current = { ...end };
+      }
+    );
+  }, [isLoaded, speak]);
+
+  // --- GPS Tracking ---
+  useEffect(() => {
+    if (!isMapReady || !navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude, heading, speed } = pos.coords;
-        const newPos = { lat: latitude, lng: longitude };
         const spd = speed ?? 0;
         speedRef.current = spd;
         if (isMountedRef.current) { setSpeedKmh(Math.round(spd * 3.6)); setHasLocation(true); }
+
+        const newPos = { lat: latitude, lng: longitude };
+        userPosRef.current = newPos;
         if (heading !== null && spd >= 2) headingRef.current = heading;
-        else if (lastRawPosRef.current) {
-          const dist = getDistance(lastRawPosRef.current, newPos);
-          if (dist > 2.0) { const c = getBearing(lastRawPosRef.current, newPos); if (!isNaN(c)) headingRef.current = c; }
+
+        // User marker — สร้างครั้งแรกครั้งเดียว camera loop จะ handle position
+        if (!userMarkerRef.current && mapRef.current) {
+          userMarkerRef.current = new google.maps.Marker({
+            map: mapRef.current,
+            position: newPos,
+            icon: {
+              path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+              scale: 8, fillColor: "#4285F4", fillOpacity: 1,
+              strokeColor: "white", strokeWeight: 2.5,
+              rotation: smoothHeadingRef.current,
+            },
+            zIndex: 100, optimized: true,
+          });
         }
-        setMyPos(newPos);
-        lastRawPosRef.current = newPos;
-        if (!routeOrigin || getDistance(routeOrigin, newPos) > 30) setRouteOrigin(newPos);
+
+        if (patientPosRef.current) fetchRoute(newPos, patientPosRef.current);
       },
-      (err) => console.error("GPS:", err),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+      (err) => console.error("GPS Error:", err),
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
     );
-    return () => navigator.geolocation.clearWatch(id);
-  }, [routeOrigin]);
 
-  // Camera follow
-  useEffect(() => {
-    if (!isFollowing || !mapRef.current || !animatedMyPos || !window.google?.maps?.geometry) return;
-    smoothHeadingRef.current = lerpAngle(smoothHeadingRef.current, headingRef.current, 0.1);
-    const bearing = isNaN(smoothHeadingRef.current) ? 0 : smoothHeadingRef.current;
-    const center = window.google.maps.geometry.spherical.computeOffset(animatedMyPos, 80, bearing);
-    if (center && isFinite(center.lat()) && isFinite(center.lng())) {
-      try { mapRef.current.moveCamera({ center, heading: bearing, tilt: 45, zoom: 19 }); } catch (e) { }
-    }
-  }, [animatedMyPos, isFollowing]);
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [isMapReady, fetchRoute]);
 
-  // Patient polling — ใช้ API จริง
-  useEffect(() => {
-    const fetch = async () => {
+  // --- Poll Patient (API จริงของโปรเจค) ---
+  const fetchPatient = useCallback(async () => {
+    try {
       const { users_id, takecare_id, idlocation } = router.query;
       if (!users_id || !takecare_id) return;
-      try {
-        const url = `${process.env.NEXT_PUBLIC_WEB_DOMAIN}/api/location/getLocation?takecare_id=${takecare_id}&users_id=${users_id}&location_id=${idlocation || ''}`;
-        const res = await axios.get(url);
-        if (res.data?.data) {
-          const p = { lat: Number(res.data.data.locat_latitude), lng: Number(res.data.data.locat_longitude) };
-          if (!isNaN(p.lat) && !isNaN(p.lng)) { setPatientPos(p); setRouteDestination(p); }
-        }
-      } catch (e) { console.error(e); }
-    };
-    if (router.isReady) fetch();
-    const interval = setInterval(() => { if (router.isReady) fetch(); }, 3000);
-    return () => clearInterval(interval);
-  }, [router.isReady, router.query]);
 
-  // Voice
-  const speak = useCallback((text: string) => {
-    if (isMuted || typeof window === 'undefined') return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'th-TH';
-    window.speechSynthesis.speak(u);
-  }, [isMuted]);
+      const url = `${process.env.NEXT_PUBLIC_WEB_DOMAIN}/api/location/getLocation?takecare_id=${takecare_id}&users_id=${users_id}&location_id=${idlocation || ''}`;
+      const res = await axios.get(url);
+      if (!res.data?.data || !isMountedRef.current) return;
 
-  // Directions
-  useEffect(() => {
-    if (!isLoaded || !routeOrigin || !routeDestination) return;
-    const ds = new google.maps.DirectionsService();
-    ds.route({ origin: routeOrigin, destination: routeDestination, travelMode: google.maps.TravelMode.DRIVING }, (res, status) => {
-      if (status === "OK" && res) {
-        setDirections(res);
-        const leg = res.routes[0].legs[0];
-        setRouteStats({ distance: leg.distance?.text || "...", duration: leg.duration?.text || "..." });
-        if (leg.steps?.length > 0) {
-          const clean = (leg.steps[0].instructions || "").replace(/<[^>]+>/g, '');
-          const dist = leg.steps[0].distance?.text || "";
-          setCurrentInstruction(clean || "มุ่งตรงไป");
-          setStepDistance(dist);
-          if (clean !== lastInstructionRef.current) { lastInstructionRef.current = clean; speak(`อีก ${dist} ${clean}`); }
-        }
+      const newPos = { lat: Number(res.data.data.locat_latitude), lng: Number(res.data.data.locat_longitude) };
+      if (isNaN(newPos.lat) || isNaN(newPos.lng)) return;
+
+      if (patientPosRef.current) {
+        const dist = haversineDistance(patientPosRef.current.lat, patientPosRef.current.lng, newPos.lat, newPos.lng);
+        if (dist < 15) return;
       }
-    });
-  }, [isLoaded, routeOrigin, routeDestination, speak]);
+
+      patientPosRef.current = newPos;
+      if (!mapRef.current) return;
+
+      if (!patientMarkerRef.current) {
+        patientMarkerRef.current = new google.maps.Marker({
+          map: mapRef.current,
+          position: newPos,
+          icon: {
+            url: "https://cdn-icons-png.flaticon.com/512/684/684908.png",
+            scaledSize: new google.maps.Size(44, 44),
+            anchor: new google.maps.Point(22, 44),
+          },
+          zIndex: 90,
+        });
+      }
+
+      if (userPosRef.current) fetchRoute(userPosRef.current, newPos);
+    } catch (err) {
+      console.error("Patient fetch error:", err);
+    }
+  }, [fetchRoute, router.query]);
+
+  useEffect(() => {
+    if (router.isReady) fetchPatient();
+    const interval = setInterval(() => { if (router.isReady) fetchPatient(); }, 3000);
+    return () => clearInterval(interval);
+  }, [fetchPatient, router.isReady]);
 
   const handleRecenter = () => {
-    setIsFollowing(true);
+    setIsUserPanning(true);
     if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
-    if (myPos && mapRef.current) mapRef.current.moveCamera({ center: myPos, zoom: 19, heading: smoothHeadingRef.current, tilt: 45 });
+    if (mapRef.current && userPosRef.current && window.google?.maps?.geometry) {
+      const center = window.google.maps.geometry.spherical.computeOffset(
+        new google.maps.LatLng(userPosRef.current.lat, userPosRef.current.lng),
+        130, smoothHeadingRef.current
+      );
+      try { mapRef.current.moveCamera({ center, zoom: 19, heading: smoothHeadingRef.current, tilt: 45 }); } catch (e) { }
+      panTimeoutRef.current = setTimeout(() => {
+        if (isMountedRef.current) setIsUserPanning(false);
+      }, 800);
+    }
   };
 
-  const getArrivalTime = () => {
-    if (!routeStats) return "--:--";
-    const m = routeStats.duration.match(/(\d+)/);
-    if (m) { const d = new Date(); d.setMinutes(d.getMinutes() + parseInt(m[0])); return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }); }
-    return "--:--";
-  };
-
+  // Loading state
   if (!isLoaded) return (
     <div className="h-[100dvh] bg-black text-white flex items-center justify-center">
-      <div className="text-center"><div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4" /><p>กำลังโหลดแผนที่...</p></div>
+      <div className="text-center">
+        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <p>กำลังโหลดแผนที่...</p>
+      </div>
     </div>
   );
 
-  const PATIENT_ICON_FG = { url: "https://cdn-icons-png.flaticon.com/512/684/684908.png", scaledSize: new google.maps.Size(44, 44), anchor: new google.maps.Point(22, 44) };
-  const PATIENT_ICON_BG = { path: "M 0,0 C -2,-20 -10,-22 -10,-30 A 10,10 0 1,1 10,-30 C 10,-22 2,-20 0,0 z", fillColor: "white", fillOpacity: 1, strokeColor: "white", strokeWeight: 4, scale: 1.2, anchor: new google.maps.Point(0, 0) };
-
   return (
-    <div className="relative w-full h-[100dvh] bg-gray-900 overflow-hidden font-sans select-none">
-
-      <GoogleMap mapContainerStyle={MAP_CONTAINER_STYLE} center={INITIAL_CENTER} zoom={19} onLoad={onLoad}
-        onDragStart={() => { setIsFollowing(false); if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); }}
-        options={{ disableDefaultUI: true, mapTypeId: mapType, gestureHandling: "greedy" }}>
-
-        {animatedMyPos && (
-          <MarkerF position={animatedMyPos} options={{ optimized: true }}
-            icon={{ path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 8, fillColor: "#4285F4", fillOpacity: 1, strokeColor: "white", strokeWeight: 2.5, rotation: smoothHeadingRef.current }}
-            zIndex={100} />
+    <div className="relative w-full h-[100dvh] overflow-hidden bg-black select-none font-sans">
+      {/* Map */}
+      <GoogleMap
+        mapContainerStyle={MAP_CONTAINER_STYLE}
+        center={{ lat: 16.8398, lng: 100.2654 }}
+        zoom={19}
+        onLoad={onLoad}
+        onDragStart={() => { setIsUserPanning(true); if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); }}
+        onDragEnd={() => {
+          if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
+          panTimeoutRef.current = setTimeout(() => { if (isMountedRef.current) setIsUserPanning(false); }, 5000);
+        }}
+        options={{ disableDefaultUI: true, mapTypeId: mapStyle, gestureHandling: "greedy" }}
+      >
+        {directions && (
+          <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, preserveViewport: true, polylineOptions: { strokeColor: "#4285F4", strokeWeight: 10, strokeOpacity: 0.9 } }} />
         )}
-        {animatedPatientPos && (<>
-          <MarkerF position={animatedPatientPos} icon={PATIENT_ICON_BG as any} zIndex={90} options={{ optimized: false }} />
-          <MarkerF position={animatedPatientPos} icon={PATIENT_ICON_FG as any} zIndex={91} options={{ optimized: false }} />
-        </>)}
-        {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, preserveViewport: true, polylineOptions: { strokeColor: "#4285F4", strokeWeight: 10, strokeOpacity: 0.9 } }} />}
       </GoogleMap>
 
-      {/* TOP BANNER */}
-      <div className="absolute top-0 left-0 right-0 z-30 px-3 pt-3">
+      {/* ===== TOP BANNER ===== */}
+      <div className="absolute top-0 left-0 right-0 z-20 px-3 pt-3">
         <div className="bg-[#0F5338] rounded-2xl shadow-2xl px-4 py-4 flex items-center gap-3 min-h-[88px]">
           <div className="shrink-0 flex flex-col items-center gap-1 w-14">
-            {getManeuverIcon(currentInstruction)}
+            {getManeuverIcon(maneuverType, maneuverModifier)}
             <span className="text-white font-extrabold text-sm leading-none">{stepDistance}</span>
           </div>
           <div className="w-px h-12 bg-white/25 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-white font-bold text-[20px] leading-tight">
-              {!hasLocation ? "กำลังหาตำแหน่ง..." : currentInstruction}
+            <p className="text-white font-bold text-[22px] leading-tight">
+              {!isMapReady ? "กำลังโหลด..." : !hasLocation ? "กำลังหาตำแหน่ง..." : instruction}
             </p>
           </div>
         </div>
       </div>
 
-      {/* RIGHT BUTTONS */}
-      <div className="absolute right-3 z-30 flex flex-col gap-3" style={{ top: "112px" }}>
-        <MapLayerControl mapType={mapType} setMapType={setMapType} />
+      {/* ===== RIGHT BUTTONS ===== */}
+      <div className="absolute right-3 z-20 flex flex-col gap-3" style={{ top: "160px" }}>
+        {/* เข็มทิศ */}
+        <button
+          onClick={() => {
+            setIsUserPanning(true);
+            if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
+            if (mapRef.current) {
+              try { mapRef.current.moveCamera({ heading: 0, tilt: 0 }); } catch (e) { }
+            }
+          }}
+          className="w-12 h-12 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+        >
+          <svg className="w-7 h-7" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="11" fill="white" stroke="#e5e7eb" strokeWidth="1" />
+            <path d="M12 4L9.5 12h5L12 4Z" fill="#EA4335" />
+            <path d="M12 20L14.5 12h-5L12 20Z" fill="#9ca3af" />
+          </svg>
+        </button>
+        {/* ปุ่มเลเยอร์ */}
+        <button onClick={() => setIsLayerModalOpen(true)} className="w-12 h-12 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform">
+          <svg className="w-6 h-6 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+            <polyline points="2 12 12 17 22 12" />
+            <polyline points="2 17 12 22 22 17" />
+          </svg>
+        </button>
+        {/* เสียง */}
         <button onClick={() => setIsMuted(!isMuted)} className="w-12 h-12 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform">
-          {isMuted
-            ? <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /><path strokeLinecap="round" strokeLinejoin="round" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" /></svg>
-            : <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
-          }
+          {isMuted ? (
+            <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="1" y1="1" x2="23" y2="23" /><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            </svg>
+          ) : (
+            <svg className="w-6 h-6 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            </svg>
+          )}
         </button>
       </div>
 
-      {/* SPEED */}
-      <div className="absolute z-30 left-3" style={{ bottom: "148px" }}>
+      {/* ===== LAYER MODAL ===== */}
+      {isLayerModalOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setIsLayerModalOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-[80%] max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold text-gray-900">ประเภทแผนที่</h3>
+              <button onClick={() => setIsLayerModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="flex justify-center gap-6">
+              <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => { setMapStyle("roadmap"); setIsLayerModalOpen(false); }}>
+                <div className={`w-[84px] h-[84px] rounded-xl overflow-hidden border-2 transition-colors ${mapStyle === "roadmap" ? "border-[#4285F4] shadow-md" : "border-gray-200 group-hover:border-gray-300"}`}>
+                  <svg viewBox="0 0 84 84" className="w-full h-full">
+                    <rect width="84" height="84" fill="#e8f0e8" />
+                    <path d="M0 42 Q20 30 42 45 T84 38" stroke="#b0c4b0" strokeWidth="8" fill="none" opacity="0.5" />
+                    <path d="M10 0 L10 84" stroke="#fff" strokeWidth="3" />
+                    <path d="M40 0 L40 84" stroke="#fff" strokeWidth="2" />
+                    <path d="M0 25 L84 25" stroke="#fff" strokeWidth="2" />
+                    <path d="M0 60 L84 60" stroke="#fff" strokeWidth="3" />
+                    <path d="M20 0 Q35 42 50 84" stroke="#90b8db" strokeWidth="4" fill="none" />
+                    <rect x="55" y="10" width="20" height="30" rx="2" fill="#d4d4d4" opacity="0.4" />
+                  </svg>
+                </div>
+                <span className={`text-sm font-bold ${mapStyle === "roadmap" ? "text-[#4285F4]" : "text-gray-500"}`}>ค่าเริ่มต้น</span>
+              </div>
+              <div className="flex flex-col items-center gap-2 cursor-pointer group" onClick={() => { setMapStyle("hybrid"); setIsLayerModalOpen(false); }}>
+                <div className={`w-[84px] h-[84px] rounded-xl overflow-hidden border-2 transition-colors ${mapStyle === "hybrid" ? "border-[#4285F4] shadow-md" : "border-gray-200 group-hover:border-gray-300"}`}>
+                  <svg viewBox="0 0 84 84" className="w-full h-full">
+                    <rect width="84" height="84" fill="#3a5a3a" />
+                    <rect x="0" y="0" width="42" height="42" fill="#4a6a4a" />
+                    <rect x="42" y="42" width="42" height="42" fill="#4a6a4a" />
+                    <path d="M10 0 L10 84" stroke="rgba(255,255,255,0.4)" strokeWidth="2" />
+                    <path d="M40 0 L40 84" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" />
+                    <path d="M0 25 L84 25" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" />
+                    <path d="M0 60 L84 60" stroke="rgba(255,255,255,0.4)" strokeWidth="2" />
+                    <path d="M20 0 Q35 42 50 84" stroke="#5588bb" strokeWidth="3" fill="none" />
+                    <rect x="50" y="5" width="25" height="35" rx="2" fill="#2a4a2a" opacity="0.5" />
+                  </svg>
+                </div>
+                <span className={`text-sm font-bold ${mapStyle === "hybrid" ? "text-[#4285F4]" : "text-gray-500"}`}>ดาวเทียม</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== SPEED ===== */}
+      <div className="absolute z-20 left-3" style={{ bottom: "148px" }}>
         <div className="w-16 h-16 bg-white rounded-full shadow-lg flex flex-col items-center justify-center border-2 border-gray-100">
-          <span className="text-[26px] font-extrabold text-gray-900 leading-none">{speedKmh}</span>
+          <span className="text-[26px] font-extrabold text-gray-900 leading-none">{hasLocation ? speedKmh : "0"}</span>
           <span className="text-[11px] font-semibold text-gray-500 leading-none mt-0.5">km/h</span>
         </div>
       </div>
 
-      {/* RECENTER */}
-      {!isFollowing && (
-        <div className="absolute z-30 left-3" style={{ bottom: "224px" }}>
+      {/* ===== RECENTER — อยู่ซ้ายบนของ speed ===== */}
+      {isUserPanning && (
+        <div className="absolute z-20 left-3" style={{ bottom: "224px" }}>
           <button onClick={handleRecenter} className="bg-[#4285F4] text-white px-4 py-2.5 rounded-full shadow-xl flex items-center gap-2 font-bold text-sm active:scale-95 transition-transform">
-            <svg className="w-4 h-4 rotate-45" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
+            <svg className="w-4 h-4 rotate-45" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+            </svg>
             ปรับจุดกลาง
           </button>
         </div>
       )}
 
-      {/* BOTTOM SHEET */}
-      <div className="absolute bottom-0 left-0 w-full z-30 bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.2)] px-5 pt-3 pb-8">
+      {/* ===== BOTTOM SHEET ===== */}
+      <div className="absolute bottom-0 left-0 right-0 z-20 bg-white rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.15)] pt-3 pb-8 px-5">
         <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3" />
         <div className="flex items-center justify-between gap-3">
           <div>
-            {routeStats ? (<>
-              <div className="flex items-baseline gap-1">
-                <span className="text-[42px] font-extrabold text-[#188038] leading-none">{routeStats.duration.match(/\d+/)?.[0] || "--"}</span>
-                <span className="text-[22px] font-bold text-[#188038] ml-1">นาที</span>
-                <svg className="w-5 h-5 text-gray-700 ml-1 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-              </div>
-              <p className="text-gray-500 text-base font-medium mt-1 flex items-center gap-2">
-                <span>{routeStats.distance}</span>
-                <span className="w-1 h-1 rounded-full bg-gray-400 inline-block" />
-                <span>{getArrivalTime()} น.</span>
-              </p>
-            </>) : <span className="text-xl font-bold text-gray-400 animate-pulse">กำลังคำนวณเส้นทาง...</span>}
+            <div className="flex items-baseline gap-1">
+              <span className="text-[42px] font-extrabold text-[#188038] leading-none">{durationMin}</span>
+              <span className="text-[22px] font-bold text-[#188038] ml-1">นาที</span>
+              <svg className="w-5 h-5 text-gray-700 ml-1 mb-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+              </svg>
+            </div>
+            <p className="text-gray-500 text-base font-medium mt-1 flex items-center gap-2">
+              <span>{totalDistance}</span>
+              <span className="w-1 h-1 rounded-full bg-gray-400 inline-block" />
+              <span>{arrivalTime} น.</span>
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <button className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center active:scale-95 transition-transform">
-              <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
+              <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
             </button>
-            <button onClick={() => router.back()} className="bg-[#EA4335] text-white font-bold text-lg h-12 px-7 rounded-full shadow-md active:scale-95 transition-all">ออก</button>
+            <Link href="/">
+              <button className="bg-[#EA4335] text-white font-bold text-lg h-12 px-7 rounded-full shadow-md active:scale-95 transition-all">
+                ออก
+              </button>
+            </Link>
           </div>
         </div>
       </div>
 
     </div>
   );
-};
-
-export default NavigationMode;
+}

@@ -334,7 +334,7 @@ const Location = () => {
                         padding: padding, // Offset for bottom sheet
                         mapTypeId: mapType,
                         gestureHandling: "greedy",
-                    }}
+                    } as any}
                     onDragStart={() => setAutoFollow(false)}
                     onZoomChanged={() => setAutoFollow(false)}
                 >
