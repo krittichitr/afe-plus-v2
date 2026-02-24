@@ -19,6 +19,7 @@ export const GoogleMapsProvider = ({ children }: { children: ReactNode }) => {
     googleMapsApiKey: (process.env.GoogleMapsApiKey || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) as string,
     version: 'weekly',
     libraries: LIBRARIES,
+    language: 'th',
   });
 
   return (

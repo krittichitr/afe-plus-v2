@@ -130,6 +130,8 @@ export default function NavigationPage() {
 
   const onLoad = useCallback((m: google.maps.Map) => {
     mapRef.current = m;
+    m.setCenter({ lat: 16.8398, lng: 100.2654 });
+    m.setZoom(19);
     setIsMapReady(true);
   }, []);
 
@@ -184,7 +186,7 @@ export default function NavigationPage() {
       if (!isUserPanning && smoothUserPosRef.current && window.google?.maps?.geometry) {
         const center = window.google.maps.geometry.spherical.computeOffset(
           new google.maps.LatLng(smoothUserPosRef.current.lat, smoothUserPosRef.current.lng),
-          130, smoothHeadingRef.current
+          50, smoothHeadingRef.current
         );
         if (center && isFinite(center.lat()) && isFinite(center.lng())) {
           try { mapRef.current.moveCamera({ center, heading: smoothHeadingRef.current, tilt: 45, zoom: 19 }); } catch (e) { }
@@ -213,7 +215,7 @@ export default function NavigationPage() {
 
     const ds = new google.maps.DirectionsService();
     ds.route(
-      { origin: start, destination: end, travelMode: google.maps.TravelMode.DRIVING },
+      { origin: start, destination: end, travelMode: google.maps.TravelMode.DRIVING, region: "TH" },
       (res, status) => {
         if (status !== "OK" || !res || !isMountedRef.current) return;
         setDirections(res);
@@ -371,7 +373,7 @@ export default function NavigationPage() {
     if (mapRef.current && userPosRef.current && window.google?.maps?.geometry) {
       const center = window.google.maps.geometry.spherical.computeOffset(
         new google.maps.LatLng(userPosRef.current.lat, userPosRef.current.lng),
-        130, smoothHeadingRef.current
+        50, smoothHeadingRef.current
       );
       try { mapRef.current.moveCamera({ center, zoom: 19, heading: smoothHeadingRef.current, tilt: 45 }); } catch (e) { }
       panTimeoutRef.current = setTimeout(() => {
@@ -392,23 +394,23 @@ export default function NavigationPage() {
 
   return (
     <div className="relative w-full h-[100dvh] overflow-hidden bg-black select-none font-sans">
-      {/* Map */}
-      <GoogleMap
-        mapContainerStyle={MAP_CONTAINER_STYLE}
-        center={{ lat: 16.8398, lng: 100.2654 }}
-        zoom={19}
-        onLoad={onLoad}
-        onDragStart={() => { setIsUserPanning(true); if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); }}
-        onDragEnd={() => {
-          if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
-          panTimeoutRef.current = setTimeout(() => { if (isMountedRef.current) setIsUserPanning(false); }, 5000);
-        }}
-        options={{ disableDefaultUI: true, mapTypeId: mapStyle, gestureHandling: "greedy" }}
+      {/* Map — ครอบ div เพื่อจับ touch/pinch ทุกชนิด */}
+      <div
+        onTouchStart={() => { setIsUserPanning(true); if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); }}
+        onTouchEnd={() => { if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); panTimeoutRef.current = setTimeout(() => { if (isMountedRef.current) setIsUserPanning(false); }, 5000); }}
+        onMouseDown={() => { setIsUserPanning(true); if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); }}
+        onMouseUp={() => { if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current); panTimeoutRef.current = setTimeout(() => { if (isMountedRef.current) setIsUserPanning(false); }, 5000); }}
       >
-        {directions && (
-          <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, preserveViewport: true, polylineOptions: { strokeColor: "#4285F4", strokeWeight: 10, strokeOpacity: 0.9 } }} />
-        )}
-      </GoogleMap>
+        <GoogleMap
+          mapContainerStyle={MAP_CONTAINER_STYLE}
+          onLoad={onLoad}
+          options={{ disableDefaultUI: true, mapTypeId: mapStyle, gestureHandling: "greedy" }}
+        >
+          {directions && (
+            <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, preserveViewport: true, polylineOptions: { strokeColor: "#4285F4", strokeWeight: 10, strokeOpacity: 0.9 } }} />
+          )}
+        </GoogleMap>
+      </div>
 
       {/* ===== TOP BANNER ===== */}
       <div className="absolute top-0 left-0 right-0 z-20 px-3 pt-3">
@@ -428,23 +430,6 @@ export default function NavigationPage() {
 
       {/* ===== RIGHT BUTTONS ===== */}
       <div className="absolute right-3 z-20 flex flex-col gap-3" style={{ top: "160px" }}>
-        {/* เข็มทิศ */}
-        <button
-          onClick={() => {
-            setIsUserPanning(true);
-            if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
-            if (mapRef.current) {
-              try { mapRef.current.moveCamera({ heading: 0, tilt: 0 }); } catch (e) { }
-            }
-          }}
-          className="w-12 h-12 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform"
-        >
-          <svg className="w-7 h-7" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="11" fill="white" stroke="#e5e7eb" strokeWidth="1" />
-            <path d="M12 4L9.5 12h5L12 4Z" fill="#EA4335" />
-            <path d="M12 20L14.5 12h-5L12 20Z" fill="#9ca3af" />
-          </svg>
-        </button>
         {/* ปุ่มเลเยอร์ */}
         <button onClick={() => setIsLayerModalOpen(true)} className="w-12 h-12 bg-white rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform">
           <svg className="w-6 h-6 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -555,11 +540,6 @@ export default function NavigationPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center active:scale-95 transition-transform">
-              <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-              </svg>
-            </button>
             <Link href="/">
               <button className="bg-[#EA4335] text-white font-bold text-lg h-12 px-7 rounded-full shadow-md active:scale-95 transition-all">
                 ออก
