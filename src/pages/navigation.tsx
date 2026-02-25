@@ -466,12 +466,12 @@ export default function NavigationPage() {
           wrapper.style.cssText = `
             background: white;
             border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
-            padding: 12px 14px 10px;
+            padding: 14px 16px 12px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.35);
             display: flex; align-items: center; justify-content: center;
           `;
           wrapper.innerHTML = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="#4285F4">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="#4285F4">
               <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
             </svg>
           `;
@@ -525,14 +525,14 @@ export default function NavigationPage() {
       if (!patientMarkerRef.current) {
         const el = document.createElement("div");
         el.style.cssText = `
-          width: 40px; height: 40px;
+          width: 48px; height: 48px;
           background: white;
           border: 3px solid #e53e3e;
           border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
           box-shadow: 0 2px 12px rgba(229,62,62,0.45);
         `;
-        el.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="#e53e3e"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>`;
+        el.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="#e53e3e"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>`;
         patientMarkerRef.current = new mapboxgl.Marker({ element: el })
           .setLngLat([newPos.lng, newPos.lat])
           .addTo(map.current);
@@ -640,26 +640,72 @@ export default function NavigationPage() {
       {/* ===== LAYER MODAL ===== */}
       {isLayerModalOpen && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setIsLayerModalOpen(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-[85%] max-w-sm" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-gray-800">ประเภทแผนที่</h3>
-            </div>
-            <div className="flex justify-center gap-8">
-              {/* Default Street Style */}
-              <div className="flex flex-col items-center gap-3 cursor-pointer group" onClick={() => { setMapStyle("mapbox://styles/mapbox/streets-v12"); setIsLayerModalOpen(false); }}>
-                <div className={`w-20 h-20 bg-gray-50 rounded-2xl overflow-hidden border-[3px] transition-colors p-3 flex items-center justify-center ${mapStyle === "mapbox://styles/mapbox/streets-v12" ? "border-[#008296] bg-[#E0F7FA]" : "border-transparent"}`}>
-                  <img src="https://cdn-icons-png.flaticon.com/512/854/854894.png" alt="ค่าเริ่มต้น" className="w-full h-full object-contain drop-shadow-sm opacity-80" />
-                </div>
-                <span className={`text-[15px] font-bold ${mapStyle === "mapbox://styles/mapbox/streets-v12" ? "text-[#008296]" : "text-gray-600"}`}>ค่าเริ่มต้น</span>
-              </div>
+          <div className="bg-white rounded-[40px] shadow-2xl p-10 w-[95%] max-w-[380px] relative" onClick={(e) => e.stopPropagation()}>
 
-              {/* Satellite Style */}
-              <div className="flex flex-col items-center gap-3 cursor-pointer group" onClick={() => { setMapStyle("mapbox://styles/mapbox/satellite-streets-v12"); setIsLayerModalOpen(false); }}>
-                <div className={`w-20 h-20 bg-gray-50 rounded-2xl overflow-hidden border-[3px] transition-colors p-3 flex items-center justify-center ${mapStyle === "mapbox://styles/mapbox/satellite-streets-v12" ? "border-[#008296] bg-[#E0F7FA]" : "border-transparent"}`}>
-                  <img src="https://cdn-icons-png.flaticon.com/512/3233/3233887.png" alt="ดาวเทียม" className="w-full h-full object-contain drop-shadow-sm opacity-80" />
+            {/* ปุ่มปิดมุมขวาบน */}
+            <button
+              onClick={() => setIsLayerModalOpen(false)}
+              className="absolute top-8 right-8 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+
+            <div className="mb-10">
+              <h3 className="text-[24px] font-bold text-[#3C4043]">ประเภทแผนที่</h3>
+            </div>
+
+            <div className="flex justify-center gap-12">
+              {/* ตัวเลือก: ค่าเริ่มต้น */}
+              <button
+                className="flex flex-col items-center gap-4 outline-none group"
+                onClick={() => {
+                  setMapStyle("mapbox://styles/mapbox/streets-v12");
+                  // เพิ่มหน่วงเวลาปิด modal เล็กน้อยเพื่อให้เห็น effect การเลือก
+                  setTimeout(() => setIsLayerModalOpen(false), 200);
+                }}
+              >
+                <div className={`w-[96px] h-[96px] rounded-[28px] overflow-hidden border-[4px] transition-all duration-200 ${mapStyle === "mapbox://styles/mapbox/streets-v12"
+                  ? "border-[#4D8D9A] shadow-md scale-105"
+                  : "border-transparent opacity-80 group-hover:opacity-100"
+                  }`}>
+                  <img
+                    src="/map-default.png"
+                    alt="Standard"
+                    className="w-full h-full object-cover"
+                  />
                 </div>
-                <span className={`text-[15px] font-bold ${mapStyle === "mapbox://styles/mapbox/satellite-streets-v12" ? "text-[#008296]" : "text-gray-600"}`}>ดาวเทียม</span>
-              </div>
+                <span className={`text-[17px] font-bold transition-colors ${mapStyle === "mapbox://styles/mapbox/streets-v12" ? "text-[#4D8D9A]" : "text-[#5F6368]"
+                  }`}>
+                  ค่าเริ่มต้น
+                </span>
+              </button>
+
+              {/* ตัวเลือก: ดาวเทียม */}
+              <button
+                className="flex flex-col items-center gap-4 outline-none group"
+                onClick={() => {
+                  setMapStyle("mapbox://styles/mapbox/satellite-streets-v12");
+                  setTimeout(() => setIsLayerModalOpen(false), 200);
+                }}
+              >
+                <div className={`w-[96px] h-[96px] rounded-[28px] overflow-hidden border-[4px] transition-all duration-200 ${mapStyle === "mapbox://styles/mapbox/satellite-streets-v12"
+                  ? "border-[#4D8D9A] shadow-md scale-105"
+                  : "border-transparent opacity-80 group-hover:opacity-100"
+                  }`}>
+                  <img
+                    src="/map-satellite.png"
+                    alt="Satellite"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <span className={`text-[17px] font-bold transition-colors ${mapStyle === "mapbox://styles/mapbox/satellite-streets-v12" ? "text-[#4D8D9A]" : "text-[#5F6368]"
+                  }`}>
+                  ดาวเทียม
+                </span>
+              </button>
             </div>
           </div>
         </div>

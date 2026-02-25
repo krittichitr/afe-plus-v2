@@ -25,7 +25,7 @@ const PATIENT_ICON_BG = {
 };
 const MY_LOC_ICON_OPT = {
     path: typeof google !== "undefined" ? google.maps.SymbolPath.FORWARD_CLOSED_ARROW : 1,
-    scale: 6,
+    scale: 8,
     fillColor: "#4285F4", // Blue arrow
     fillOpacity: 1,
     strokeColor: "white",
